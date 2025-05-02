@@ -1,0 +1,117 @@
+{
+    "metadata": {
+        "export_time": "2025-05-01T22:03:40.344867",
+        "period_filter": "day",
+        "date_property_used": "Date",
+        "period_details": {
+            "date": "2025-01-01"
+        }
+    },
+    "entries": [
+        {
+            "object": "page",
+            "id": "1908c352-23df-80ef-baae-c8387f8ad1b0",
+            "created_time": "2025-02-04T21:24:00.000Z",
+            "last_edited_time": "2025-02-04T21:28:00.000Z",
+            "created_by": {
+                "object": "user",
+                "id": "9915cb78-abf7-4c5d-a28f-7e52261c663a"
+            },
+            "last_edited_by": {
+                "object": "user",
+                "id": "9915cb78-abf7-4c5d-a28f-7e52261c663a"
+            },
+            "cover": null,
+            "icon": null,
+            "parent": {
+                "type": "database_id",
+                "database_id": "276188e8-f1bd-42c4-8da2-af50070e7d96"
+            },
+            "archived": false,
+            "in_trash": false,
+            "properties": {
+                "Tags": {
+                    "id": "!'(w",
+                    "type": "multi_select",
+                    "multi_select": [
+                        {
+                            "id": "4322f3ac-635f-4d2f-808f-22d639bc393b",
+                            "name": "Daily",
+                            "color": "purple"
+                        },
+                        {
+                            "id": "8583d59c-8657-4efb-a940-8cdebc222ab8",
+                            "name": "Cooking",
+                            "color": "red"
+                        },
+                        {
+                            "id": "6f842940-ac87-4b5c-b306-85db330185dd",
+                            "name": "Video",
+                            "color": "default"
+                        },
+                        {
+                            "id": "8cd7fa69-eed3-4001-b13e-00dcaebe8cd3",
+                            "name": "Cute Moments",
+                            "color": "yellow"
+                        }
+                    ]
+                },
+                "Food": {
+                    "id": "N%5D%60K",
+                    "type": "multi_select",
+                    "multi_select": []
+                },
+                "AI summary": {
+                    "id": "YIL%5B",
+                    "type": "rich_text",
+                    "rich_text": []
+                },
+                "Family": {
+                    "id": "%5Cc%5EF",
+                    "type": "multi_select",
+                    "multi_select": []
+                },
+                "Friends": {
+                    "id": "_%3D%3Dj",
+                    "type": "multi_select",
+                    "multi_select": []
+                },
+                "Date": {
+                    "id": "%7D%25j%7B",
+                    "type": "date",
+                    "date": {
+                        "start": "2025-01-01",
+                        "end": null,
+                        "time_zone": null
+                    }
+                },
+                "Name": {
+                    "id": "title",
+                    "type": "title",
+                    "title": [
+                        {
+                            "type": "text",
+                            "text": {
+                                "content": "Relaxed New Year’s Day",
+                                "link": null
+                            },
+                            "annotations": {
+                                "bold": false,
+                                "italic": false,
+                                "strikethrough": false,
+                                "underline": false,
+                                "code": false,
+                                "color": "default"
+                            },
+                            "plain_text": "Relaxed New Year’s Day",
+                            "href": null
+                        }
+                    ]
+                }
+            },
+            "url": "https://www.notion.so/Relaxed-New-Year-s-Day-1908c35223df80efbaaec8387f8ad1b0",
+            "public_url": null,
+            "content": "Had a laid back start to the new year. Made salmon tostadas today (the tuna ones were >), but it was nice to revisit our pickles from the night before. The lime-marinated carrots got so sour and salty! I can see why that is really truly a quick pickle.\nSee the videos below for a cute moment of Leo enjoying his 1-2-3!!!! stand up game."
+        }
+    ]
+}
