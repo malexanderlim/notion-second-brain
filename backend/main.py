@@ -6,15 +6,31 @@ import os
 import logging # Import logging
 from dotenv import load_dotenv
 
-# Refactor and import RAG logic
-from backend.rag_query import perform_rag_query # Adjusted import path
+# --- Load Environment Variables First ---
+load_dotenv() 
 
-load_dotenv()
+# --- Import RAG logic AFTER loading .env ---
+# Ensure functions needed for initialization are imported
+from backend.rag_query import perform_rag_query, load_rag_data, initialize_openai_client 
 
 # Setup logger for the main application
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+# --- Initialize RAG System --- 
+# Call this early, potentially wrap in startup event
+API_KEY = os.getenv("OPENAI_API_KEY")
+try:
+    logger.info("Loading RAG data...")
+    load_rag_data()
+    logger.info("Initializing OpenAI client...")
+    initialize_openai_client(API_KEY) # Pass the key explicitly
+    logger.info("RAG system initialized successfully.")
+except Exception as e:
+    logger.critical(f"Failed to initialize RAG system on startup: {e}", exc_info=True)
+    # Depending on desired behavior, you might want the app to fail startup
+    # For now, it will log critical and continue, but queries will likely fail.
 
 app = FastAPI(
     title="Notion Second Brain API",

@@ -118,22 +118,22 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Create `backend/requirements.txt` (including Flask/FastAPI, openai, faiss-cpu, etc.).
     - [x] Add CORS middleware to the backend application.
   - [ ] **Frontend Setup:**
-    - [ ] Create `frontend/` directory.
-    - [ ] Initialize React + Vite + TS project (`npm create vite@latest frontend -- --template react-ts`).
-    - [ ] Install and configure Tailwind CSS.
-    - [ ] Initialize `shadcn/ui` (`npx shadcn-ui@latest init`).
-    - [ ] Install necessary `shadcn/ui` components (e.g., `button`, `input`, `card`, `skeleton`, `loader-2`).
-    - [ ] Install `axios` (or decide to use `fetch`).
+    - [x] Create `frontend/` directory.
+    - [x] Initialize React + Vite + TS project (`npm create vite@latest frontend -- --template react-ts`).
+    - [x] Install and configure Tailwind CSS.
+    - [x] Initialize `shadcn/ui` (`npx shadcn@latest init`).
+    - [x] Install necessary `shadcn/ui` components (e.g., `button`, `input`, `card`, `skeleton`).
+    - [x] Install `axios`.
   - [ ] **Frontend UI Implementation:**
-    - [ ] Create main `App.tsx` component structure.
-    - [ ] Add `Input` for query and `Button` for submission.
-    - [ ] Add `Card` for displaying the answer.
-    - [ ] Implement `useState` hooks for query, loading, answer, sources, error.
-    - [ ] Implement the `handleSubmit` function to call the backend API.
-    - [ ] Implement loading state display (e.g., show `Skeleton` or `Loader2`, disable button).
-    - [ ] Render the answer text within the `Card`.
-    - [ ] Render source links (title + URL) below the answer.
-    - [ ] Display a generic error message if the API call fails.
+    - [x] Create main `App.tsx` component structure.
+    - [x] Add `Input` for query and `Button` for submission.
+    - [x] Add `Card` for displaying the answer.
+    - [x] Implement `useState` hooks for query, loading, answer, sources, error.
+    - [x] Implement the `handleSubmit` function to call the backend API.
+    - [x] Implement loading state display (e.g., show `Skeleton`).
+    - [x] Render the answer text within the `Card`.
+    - [x] Render source links (title + URL) below the answer.
+    - [x] Display a generic error message if the API call fails.
   - [ ] **Integration & Testing:**
     - [ ] Run backend and frontend dev servers concurrently.
     - [ ] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed.
@@ -215,13 +215,16 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
   - `backend/main.py` - FastAPI/Flask application entry point ✅
   - `backend/rag_query.py` - Refactored RAG query logic ✅
   - `backend/requirements.txt` - Backend Python dependencies ✅
-- `frontend/` - Directory for React frontend code ⏳
-  - `frontend/src/App.tsx` - Main React application component ⏳
-  - `frontend/src/components/ui/` - shadcn/ui components ⏳
-  - `frontend/package.json` - Frontend Node.js dependencies ⏳
-  - `frontend/vite.config.ts` - Vite configuration ⏳
-  - `frontend/tailwind.config.js` - Tailwind CSS configuration ⏳
-  - `frontend/tsconfig.json` - TypeScript configuration ⏳
+- `frontend/` - Directory for React frontend code ✅
+  - `frontend/src/App.tsx` - Main React application component ✅
+  - `frontend/src/components/ui/` - shadcn/ui components ✅
+  - `frontend/package.json` - Frontend Node.js dependencies ✅
+  - `frontend/vite.config.ts` - Vite configuration ✅
+  - `frontend/tailwind.config.js` - Tailwind CSS configuration ✅
+  - `frontend/tsconfig.json` - TypeScript configuration ✅
+  - `frontend/tsconfig.app.json` - TypeScript app configuration ✅
+  - `frontend/src/lib/utils.ts` - shadcn utility functions ✅
+  - `frontend/components.json` - shadcn configuration file ✅
 
 - [x] **Implement Initial Indexing (Batch Rollout):**
   - [x] Modify `cli.py` to support `--month YYYY-MM` export argument & filtering logic.
