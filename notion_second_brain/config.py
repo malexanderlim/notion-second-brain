@@ -7,6 +7,7 @@ load_dotenv()
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 # --- Logging Configuration ---
 DEFAULT_LOG_FORMAT = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
@@ -49,4 +50,13 @@ if DATABASE_ID is None:
         logging.error("NOTION_DATABASE_ID environment variable not set.")
     except NameError:
         pass
-    raise ValueError("Error: NOTION_DATABASE_ID environment variable not set. Please create a .env file or set the environment variable.") 
+    raise ValueError("Error: NOTION_DATABASE_ID environment variable not set. Please create a .env file or set the environment variable.")
+
+# Note: We don't strictly *require* OPENAI_API_KEY for *all* operations (like export),
+# so we don't raise an error here. Scripts using it (build_index, cli --query)
+# should check for its existence themselves.
+# if OPENAI_API_KEY is None:
+#     try:
+#         logging.warning("OPENAI_API_KEY environment variable not set. RAG features will fail.")
+#     except NameError:
+#         pass 

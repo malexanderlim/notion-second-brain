@@ -1,5 +1,83 @@
 ---
-description:
-globs:
+description: 
+globs: 
 alwaysApply: false
 ---
+# Design Document Creation
+
+Guidelines for creating technical design documents (TDDs) to plan and document significant development efforts.
+
+## Purpose
+
+Technical design documents serve to:
+- Clarify the goals and non-goals of a feature or change.
+- Define the proposed technical approach before implementation begins.
+- Identify dependencies, alternatives, and potential risks.
+- Provide context for future development and maintenance.
+- Facilitate technical discussions and reviews.
+
+## When to Create a TDD
+
+Create a TDD for:
+- Significant new features (e.g., adding a major capability like RAG, a web UI).
+- Substantial architectural changes (e.g., changing storage systems, refactoring core modules).
+- Complex integrations with external services.
+- Implementation choices with significant performance, cost, or security implications.
+- *When in doubt, lean towards creating one, even a brief one.*
+
+## Structure and Content
+
+Store TDDs as Markdown files in the `design/` directory (e.g., `design/FEATURE_NAME_TDD.md`).
+
+Include the following sections (adapt as necessary):
+
+1.  **Metadata:**
+    *   `Title:` Clear, descriptive title.
+    *   `Status:` Proposed | Accepted | Implemented | Deprecated
+    *   `Author(s):` Who wrote the document.
+    *   `Date:` Date created/last updated.
+    *   `(Optional) Reviewers:` Who should review/has reviewed.
+    *   `(Optional) Related Docs:` Links to other relevant TDDs, issues, etc.
+
+2.  **Introduction / Motivation / Problem:**
+    *   What is being built or changed?
+    *   Why is this work necessary? What problem does it solve?
+    *   Who is the target user or what is the target component?
+
+3.  **Goals:**
+    *   What specific, measurable outcomes should this work achieve?
+    *   List the key requirements.
+
+4.  **Non-Goals:**
+    *   What is explicitly out of scope for this specific piece of work? This helps manage scope creep.
+
+5.  **Proposed Design / Technical Solution:**
+    *   This is the core of the document.
+    *   Describe the technical approach in detail.
+    *   Use diagrams, sequence diagrams, API specifications, data models, etc., where helpful.
+    *   Break down the solution into logical components or steps.
+    *   Specify technologies, libraries, or services to be used.
+
+6.  **Alternatives Considered:**
+    *   What other approaches were considered?
+    *   Why was the proposed design chosen over the alternatives? (Pros/Cons)
+
+7.  **Impact / Risks / Open Questions:**
+    *   What are the potential impacts on existing systems, performance, cost, security, usability?
+    *   What are the known risks or potential failure modes?
+    *   What questions still need to be answered?
+
+8.  **(Optional) Implementation Plan / Phases:**
+    *   Rough breakdown of implementation steps or phases.
+
+9.  **(Optional) Future Work / Follow-on:**
+    *   What related work might be needed after this is complete?
+
+## AI Instructions
+
+When proposing significant new features or architectural changes:
+1.  Recognize the need for a design document based on the "When to Create a TDD" criteria.
+2.  Propose the creation of a TDD file in the `design/` directory.
+3.  If requested, draft the TDD content following the structure outlined above.
+4.  Link to the relevant TDD when discussing the implementation details.
+5.  Update the TDD status as the work progresses (e.g., from Proposed to Accepted/Implemented).

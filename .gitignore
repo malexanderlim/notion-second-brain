@@ -88,4 +88,11 @@ dmypy.json
 .Spotlight-V100
 .Trashes
 ehthumbs.db
-Thumbs.db 
+Thumbs.db
+
+# Project-specific ignores
+/output/
+index.faiss
+index_mapping.json
+*.log # Ignore log files if generated
+schema.json # Ignore the schema export 
