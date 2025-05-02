@@ -221,13 +221,21 @@ These steps assume you have Python 3 and `git` installed.
       NOTION_DATABASE_ID=YOUR_DATABASE_ID
       ```
 
-6.  **Test the Setup:**
+6.  **Set up OpenAI API Key (for Querying):**
+    - Get an API key from [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys).
+    - Add the key to your `.env` file:
+      ```dotenv
+      NOTION_DATABASE_ID=YOUR_DATABASE_ID
+      OPENAI_API_KEY=sk-YOUR_OPENAI_API_KEY
+      ```
+
+7.  **Test the Setup:**
     ```bash
     python cli.py --test-connection
     ```
-    *You should see a "Notion connection successful!" message.*
+    *Output files will be saved in the `output/` directory by default.*
 
-7.  **Run an Extraction:**
+8.  **Run an Extraction:**
     ```bash
     # Example: Extract all entries
     python cli.py
@@ -239,6 +247,58 @@ These steps assume you have Python 3 and `git` installed.
     python cli.py -p week --date 2023-10-23 -v
     ```
     *Output files will be saved in the `output/` directory by default.*
+
+## Usage
+
+The primary way to interact with the tool is through `cli.py`.
+
+### 1. Exporting Entries (Optional - Needed for Indexing)
+
+Use the `--export` flag (or run without other action flags) along with optional filters to save Notion entries to JSON files in the `output/` directory.
+
+```bash
+# Export all entries (creates output/all_time.json)
+python cli.py --export --period all
+# Or simply (export is default):
+python cli.py --period all 
+
+# Export entries for a specific month (e.g., Feb 2025)
+python cli.py --export --period month --year 2025 --month 2
+
+# Export entries for today
+python cli.py --export --period day
+ 
+# Export with verbose logging
+python cli.py --export --period week --date 2024-01-15 -v
+```
+
+### 2. Building the Index (Required for Querying)
+
+Before querying, you need to build a vector index from an exported JSON file. Run the `build_index.py` script.
+
+```bash
+# Build index from the default output/all_time.json file
+python build_index.py
+
+# Build index from a specific export file (e.g., Feb 2025)
+python build_index.py --input output/2025-02.json
+
+# Build index with verbose logging
+python build_index.py -v
+```
+This will create `index.faiss` and `index_mapping.json` in the project root.
+
+### 3. Querying Entries
+
+Once the index files exist, use the `--query` flag.
+
+```bash
+python cli.py --query "What did I do last weekend?"
+
+python cli.py --query "Summarize my main activities in February 2025"
+
+python cli.py --query "Any reflections on project X?"
+```
 
 ## Example Implementation Plan for Cursor
 

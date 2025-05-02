@@ -54,18 +54,23 @@ Tracking progress for the initial MVP RAG Demo focusing on a basic query loop.
 - [x] **Setup & Dependencies:**
   - [x] Add `openai`, `faiss-cpu` to `requirements.txt`
   - [x] Add `OPENAI_API_KEY` to `.env.example` (User must add to `.env`)
-- [ ] **Offline Indexing (`build_index.py`):**
-  - [ ] Create `build_index.py` script skeleton
-- [ ] **CLI Query Handling (`cli.py`):**
-  - [ ] Add `--query` argument to `argparse`
-  - [ ] Add logic to `main()` to handle `--query` mode
-  - [ ] Load FAISS index and mapping file
-  - [ ] Implement OpenAI embedding for user query
-  - [ ] Implement FAISS similarity search (top k)
-  - [ ] Implement context retrieval from mapping
-  - [ ] Implement basic prompt construction
-  - [ ] Implement OpenAI chat completion call
-  - [ ] Print LLM response to console
+- [x] **Offline Indexing (`build_index.py`):**
+  - [x] Create `build_index.py` script skeleton
+  - [x] Load entries from JSON export
+  - [x] Implement OpenAI embedding for entry content
+  - [x] Implement FAISS index creation (`IndexFlatL2`)
+  - [x] Create and save index-to-entry mapping file (`index_mapping.json`)
+  - [x] Save FAISS index (`index.faiss`)
+- [x] **CLI Query Handling (`cli.py`):**
+  - [x] Add `--query` argument to `argparse`
+  - [x] Add logic to `main()` to handle `--query` mode
+  - [x] Load FAISS index and mapping file
+  - [x] Implement OpenAI embedding for user query
+  - [x] Implement FAISS similarity search (top k)
+  - [x] Implement context retrieval from mapping
+  - [x] Implement basic prompt construction
+  - [x] Implement OpenAI chat completion call
+  - [x] Print LLM response to console
 
 ## Future Tasks (Post-MVP)
 
@@ -109,6 +114,22 @@ Tracking progress for the initial MVP RAG Demo focusing on a basic query loop.
 - [ ] **Phase 4: Web Interface (Future):**
   - [ ] Design and implement Backend API (Flask/FastAPI)
   - [ ] Design and implement Frontend (React/Next.js)
+
+- [ ] **Phase 5: Operationalization & Sync:**
+  - [ ] Create `design/ROLLOUT_SYNC_PLAN_TDD.md` (Initial draft created)
+  - [ ] Finalize strategy for initial indexing (1600+ entries)
+  - [ ] Finalize strategy for ongoing synchronization
+  - [ ] Implement initial indexing solution
+  - [ ] Implement synchronization solution
+
+- [ ] **Phase 4: Web Interface (Hyper-MVP):**
+  - [ ] Choose simple web framework (e.g., Streamlit, Gradio, basic Flask)
+  - [ ] Create basic UI with input box for query and area for displaying response
+  - [ ] Create backend endpoint/logic to receive query
+  - [ ] Reuse/adapt `cli.py` query logic (loading index, embedding, search, prompting, LLM call)
+  - [ ] Display LLM response in UI
+  - [ ] (Optional Stretch) Display token counts / estimated cost for OpenAI calls
+  - [ ] (Optional Stretch) Add dropdown/option to select LLM model
 
 ## Implementation Plan
 
