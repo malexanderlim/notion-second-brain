@@ -65,14 +65,43 @@ def build_notion_filter_from_args(args):
     """Builds a Notion API filter dictionary based on parsed arguments."""
     period_filter = None
     target_dt = None # Keep track of the primary date for filename generation
+    period_name_for_file = args.period # Default period name for filename
 
     try:
         prop = args.date_property
-        is_standard_prop = prop != "created_time" # Check if we're using a custom property or the metadata timestamp
-        filter_key = "date" if is_standard_prop else "created_time"
+        # Determine keys based on whether it's a standard property or a metadata timestamp
+        is_standard_prop = prop not in ("created_time", "last_edited_time") 
+        filter_key = "date" if is_standard_prop else prop # Use prop name directly for timestamp keys
         timestamp_key = "property" if is_standard_prop else "timestamp"
 
-        if args.period == 'day':
+        # --- NEW: Handle --export-month first ---
+        if args.export_month:
+            period_name_for_file = "month" # Set for filename generation
+            year_str, month_str = args.export_month.split('-')
+            year = int(year_str)
+            month = int(month_str)
+            if not (1 <= month <= 12):
+                raise ValueError("Month must be between 01 and 12.")
+            
+            target_dt = date(year, month, 1) # Use first of month for filename consistency
+            start_date = date(year, month, 1)
+            # Calculate next month correctly, handling year change
+            if month == 12:
+                next_month_start = date(year + 1, 1, 1)
+            else:
+                next_month_start = date(year, month + 1, 1)
+            end_date = next_month_start - timedelta(days=1)
+
+            period_filter = {
+                "and": [
+                    {timestamp_key: prop, filter_key: {"on_or_after": start_date.isoformat()}},
+                    {timestamp_key: prop, filter_key: {"on_or_before": end_date.isoformat()}}
+                ]
+            }
+            logger.info(f"Using export month {args.export_month}, filtering on '{prop}' between {start_date} and {end_date}")
+
+        # --- Existing period logic (only if --export-month is not used) ---
+        elif args.period == 'day':
             target_dt = date.fromisoformat(args.date) if args.date else date.today()
             period_filter = {timestamp_key: prop, filter_key: {"equals": target_dt.isoformat()}}
         
@@ -87,7 +116,8 @@ def build_notion_filter_from_args(args):
                 ]
             }
 
-        elif args.period == 'month':
+        # Note: This specific 'month' period is now less likely used if --export-month is preferred
+        elif args.period == 'month': 
             year, month = args.year, args.month
             target_dt = date(year, month, 1) # Date object for filename generation
             start_date = date(year, month, 1)
@@ -126,13 +156,14 @@ def build_notion_filter_from_args(args):
         # 'all' period results in period_filter being None
         
     except ValueError as e:
-        logger.error(f"Invalid date format provided: {e}")
+        logger.error(f"Invalid date format provided or error parsing month string: {e}")
         raise # Re-raise to be caught in main
     except Exception as e:
         logger.error(f"Error building Notion filter: {e}")
         raise # Re-raise to be caught in main
 
-    return (period_filter, target_dt)
+    # Return the calculated filter, the representative date, and the period name for the filename
+    return (period_filter, target_dt, period_name_for_file)
 
 # --- Argument Parsing ---
 def parse_arguments():
@@ -165,38 +196,55 @@ def parse_arguments():
 
     # --- Filtering Group (Only relevant for --export) ---
     filter_group = parser.add_argument_group(title='Filtering Options (for --export)')
-    filter_group.add_argument(
+    
+    # Define period/date args first before making them mutually exclusive with --export-month
+    filter_period_group = filter_group.add_mutually_exclusive_group() 
+    filter_period_group.add_argument(
+        "--export-month",
+        type=str,
+        metavar="YYYY-MM",
+        help="Export entries for a specific month (e.g., 2024-01). Mutually exclusive with other period/date args."
+    )
+    # Group for the older period/date flags
+    # Note: The `dest` is not strictly needed here but can help avoid confusion if we print args
+    old_period_flags = filter_period_group.add_argument_group(title='Legacy Period/Date Filters') 
+    old_period_flags.add_argument(
         "-p", "--period",
         choices=['day', 'week', 'month', 'year', 'all', 'range'],
+        # Default changed - if --export-month isn't used, maybe 'all' is better?
+        # Or maybe no default, forcing either --export-month or --period?
+        # Let's stick with 'all' for now for backward compatibility.
         default='all',
-        help="Time period to filter entries for export (default: all). Ignored for --query."
+        help="Time period filter (e.g., day, week, month, year, all, range). Default: all. Use --export-month YYYY-MM for preferred monthly export."
     )
-    filter_group.add_argument(
+    old_period_flags.add_argument(
         "--date",
-        help="Target date (YYYY-MM-DD). Defaults to today. Ignored for --query."
+        help="Target date (YYYY-MM-DD) for --period day/week. Defaults to today."
     )
-    filter_group.add_argument(
-        "--month",
+    old_period_flags.add_argument(
+        "--month", # Legacy month arg
         type=int,
-        help="Target month (1-12). Requires --year. Ignored for --query."
+        help="Target month (1-12). Requires --year. Used only with --period month."
     )
-    filter_group.add_argument(
-        "--year",
+    old_period_flags.add_argument(
+        "--year", # Legacy year arg
         type=int,
-        help="Target year (YYYY). Ignored for --query."
+        help="Target year (YYYY). Used with --period month/year."
     )
-    filter_group.add_argument(
+    old_period_flags.add_argument(
         "--start-date",
-        help="Start date for range (YYYY-MM-DD). Ignored for --query."
+        help="Start date for --period range (YYYY-MM-DD)."
     )
-    filter_group.add_argument(
+    old_period_flags.add_argument(
         "--end-date",
-        help="End date for range (YYYY-MM-DD). Defaults to today. Ignored for --query."
+        help="End date for --period range (YYYY-MM-DD). Defaults to today."
     )
+
+    # This applies to all filters
     filter_group.add_argument(
         "--date-property",
-        default="created_time",
-        help="Notion property for date filtering (default: created_time). Ignored for --query."
+        default="last_edited_time", # Changed default
+        help="Notion property for date filtering (default: last_edited_time). Recommended: last_edited_time for sync."
     )
     
     # --- Output/Config Group ---
@@ -218,16 +266,38 @@ def parse_arguments():
     is_action_specified = args.query or args.test_connection or args.schema or args.export
     if not is_action_specified:
         args.export = True
+        logger.info("No action specified, defaulting to --export.")
+        # If defaulting to export, ensure some filter is usable
+        if not args.export_month and args.period == 'all':
+             logger.info("Defaulting export to --period all. Use --export-month or other filters for specific periods.")
 
     # Basic validation (only for export)
     if args.export:
-        if args.period == 'month' and not (args.year and args.month):
-            parser.error("--period 'month' requires --year and --month when exporting.")
-        if args.period == 'year' and not args.year:
-            parser.error("--period 'year' requires --year when exporting.")
-        if args.period == 'range' and not args.start_date:
-             parser.error("--period 'range' requires --start-date when exporting.")
-             
+        # Check if conflicting period arguments were somehow passed (should be caught by mutex group, but belt-and-suspenders)
+        if args.export_month and (args.period != 'all' or args.date or args.month or args.year or args.start_date or args.end_date):
+             parser.error("--export-month cannot be used with --period, --date, --month, --year, --start-date, or --end-date.")
+        
+        # Validation for legacy period flags if --export-month is NOT used
+        if not args.export_month:
+            if args.period == 'month' and not (args.year and args.month):
+                parser.error("--period 'month' requires --year and --month when exporting.")
+            if args.period == 'year' and not args.year:
+                parser.error("--period 'year' requires --year when exporting.")
+            if args.period == 'range' and not args.start_date:
+                 parser.error("--period 'range' requires --start-date when exporting.")
+                
+        # Validate export_month format if provided
+        if args.export_month:
+            try:
+                year_str, month_str = args.export_month.split('-')
+                year = int(year_str)
+                month = int(month_str)
+                if not (1 <= month <= 12) or len(year_str) != 4 or len(month_str) != 2:
+                    raise ValueError()
+                datetime(year, month, 1) # Check if it's a valid date start
+            except (ValueError, TypeError):
+                parser.error("--export-month must be in YYYY-MM format (e.g., 2024-01).")
+
     log_level = logging.DEBUG if args.verbose else logging.INFO
     return args, log_level
 
@@ -359,21 +429,20 @@ Answer:"""
 # --- Export Function (Existing Logic Refactored) ---
 def handle_export(args, client, db_id):
     logger.info("Starting export process...")
-    # --- Build Filter --- 
+    
+    # --- Determine Filter and Filename --- 
     notion_filter = None
     target_dt_for_filename = None
-    if args.period != 'all':
-        logger.info(f"Building Notion filter for period: {args.period}")
-        try:
-            notion_filter, target_dt_for_filename = build_notion_filter_from_args(args)
-            logger.debug(f"Constructed Notion filter: {notion_filter}")
-        except Exception as e:
-            sys.exit(1)
-    else:
-        logger.info("No time period filter specified (fetching all entries).")
+    period_name = 'all' # Default if no specific period filter is applied
+    try:
+        notion_filter, target_dt_for_filename, period_name = build_notion_filter_from_args(args)
+        logger.debug(f"Constructed Notion filter: {notion_filter}")
+    except Exception as e:
+        logger.error(f"Failed to build Notion filter: {e}")
+        sys.exit(1)
 
     # --- Query Database ---
-    logger.info("Querying Notion database...")
+    logger.info(f"Querying Notion database (Filter: {json.dumps(notion_filter) if notion_filter else 'None - fetching all'}) based on property '{args.date_property}'...")
     try:
         filtered_pages = client.query_database(database_id=db_id, filter_params=notion_filter)
     except Exception as e:
@@ -381,8 +450,11 @@ def handle_export(args, client, db_id):
         sys.exit(1)
 
     if not filtered_pages:
-        logger.warning(f"No pages found matching the criteria for period: {args.period}")
-        sys.exit(0)
+        logger.warning(f"No pages found matching the criteria for period: {period_name}, filter: {notion_filter}")
+        # Optionally create an empty file to mark completion?
+        # filename = json_storage.generate_filename(period_name, dt=target_dt_for_filename)
+        # json_storage.save_entries_to_json([], filename, args.output_dir, {})
+        sys.exit(0) # Exit gracefully if no pages found
 
     logger.info(f"Retrieved {len(filtered_pages)} page entries. Processing...")
     
@@ -390,32 +462,43 @@ def handle_export(args, client, db_id):
     processed_entries = []
     for i, page in enumerate(filtered_pages):
         page_id = page.get('id')
-        page_title_prop = page.get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', '[No Title]')
-        logger.debug(f"Processing page {i+1}/{len(filtered_pages)}: ID {page_id} ({page_title_prop})")
+        # Safely get title
+        title_list = page.get('properties', {}).get('Name', {}).get('title', [])
+        page_title = title_list[0].get('plain_text', '[No Title]') if title_list else '[No Title]'
+        
+        logger.debug(f"Processing page {i+1}/{len(filtered_pages)}: ID {page_id} ({page_title})")
         if not page_id:
             logger.warning("Skipping entry with no ID.")
             continue
         
         try:
+            # Transform first (gets basic props like date, id)
             simple_entry_data = transform_page_to_simple_dict(page)
+            # Then fetch content and add it
             blocks = client.retrieve_block_children(page_id)
             content = extract_page_content(blocks)
             simple_entry_data['content'] = content 
             processed_entries.append(simple_entry_data)
         except Exception as e:
-            logger.error(f"Failed to process page ID {page_id}: {e}")
-            continue 
+            logger.error(f"Failed to process page ID {page_id} ('{page_title}'): {e}")
+            continue # Continue with the next page if one fails
 
     logger.info(f"Successfully processed {len(processed_entries)} entries.")
 
     # --- Saving ---
-    filename = json_storage.generate_filename(args.period, dt=target_dt_for_filename, year=args.year)
+    # Note: generate_filename now takes period_name which build_notion_filter_from_args returns
+    filename = json_storage.generate_filename(period_name, dt=target_dt_for_filename) 
     metadata = {
         "export_time": datetime.now().isoformat(),
-        "period_filter": args.period,
+        "period_filter_used": period_name,
         "date_property_used": args.date_property,
+        "notion_filter_applied": notion_filter, # Log the actual filter used
+        "export_month_arg": args.export_month if args.export_month else None,
+        "total_entries_processed": len(processed_entries),
+        "total_entries_retrieved": len(filtered_pages)
     }
-    if args.period != 'all':
+    # Add specific date args if they were used (primarily for non --export-month)
+    if args.period != 'all' and not args.export_month:
         metadata["period_details"] = { 
             k: v for k, v in vars(args).items() 
             if k in ['date', 'month', 'year', 'start_date', 'end_date'] and v is not None

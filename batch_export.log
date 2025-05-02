@@ -1,0 +1,139 @@
+2025-05-01 23:27:49,211 - INFO - --- Starting Batch Export Process ---
+2025-05-01 23:27:49,212 - INFO - Exporting months from 2021-01 up to 2025-03.
+2025-05-01 23:27:49,212 - INFO - Running export for month: 2021-01
+2025-05-01 23:28:11,898 - ERROR - Export failed for month 2021-01. Return code: 1
+2025-05-01 23:28:11,899 - ERROR - cli.py stderr:
+/Users/michaellim/CreativeCode/notion-second-brain/cli.py:210: DeprecationWarning: Nesting argument groups is deprecated.
+  old_period_flags = filter_period_group.add_argument_group(title='Legacy Period/Date Filters')
+2025-05-01 23:27:49,666 - INFO - root - Logging configured with level INFO
+2025-05-01 23:27:49,666 - INFO - cli - Initializing Notion client...
+2025-05-01 23:27:49,666 - INFO - cli - Starting export process...
+2025-05-01 23:27:49,666 - INFO - cli - No time period filter specified (fetching all entries).
+2025-05-01 23:27:49,666 - INFO - cli - Querying Notion database...
+2025-05-01 23:27:49,666 - INFO - notion_second_brain.notion.api - Querying Notion database: 276188e8f1bd42c48da2af50070e7d96
+2025-05-01 23:28:11,811 - INFO - notion_second_brain.notion.api - Retrieved 1608 entries from database 276188e8f1bd42c48da2af50070e7d96.
+2025-05-01 23:28:11,811 - INFO - cli - Retrieved 1608 page entries. Processing...
+Traceback (most recent call last):
+  File "/Users/michaellim/CreativeCode/notion-second-brain/cli.py", line 579, in <module>
+    main()
+    ~~~~^^
+  File "/Users/michaellim/CreativeCode/notion-second-brain/cli.py", line 570, in main
+    handle_export(args, client, db_id)
+    ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/michaellim/CreativeCode/notion-second-brain/cli.py", line 463, in handle_export
+    page_title_prop = page.get('properties', {}).get('Name', {}).get('title', [{}])[0].get('plain_text', '[No Title]')
+                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^
+IndexError: list index out of range
+
+2025-05-01 23:28:11,899 - ERROR - cli.py stdout:
+
+2025-05-01 23:28:11,899 - WARNING - Continuing export process after failure for 2021-01.
+2025-05-01 23:28:11,899 - INFO - Running export for month: 2021-02
+2025-05-01 23:29:25,018 - INFO - --- Starting Batch Export Process ---
+2025-05-01 23:29:25,018 - INFO - Exporting months from 2021-01 up to 2025-03.
+2025-05-01 23:29:25,018 - INFO - Running export for month: 2021-01
+2025-05-01 23:29:38,415 - INFO - Successfully exported 2021-01.
+2025-05-01 23:29:38,415 - INFO - Running export for month: 2021-02
+2025-05-01 23:29:52,427 - INFO - Successfully exported 2021-02.
+2025-05-01 23:29:52,428 - INFO - Running export for month: 2021-03
+2025-05-01 23:30:06,775 - INFO - Successfully exported 2021-03.
+2025-05-01 23:30:06,775 - INFO - Running export for month: 2021-04
+2025-05-01 23:30:36,731 - INFO - Successfully exported 2021-04.
+2025-05-01 23:30:36,731 - INFO - Running export for month: 2021-05
+2025-05-01 23:31:03,208 - INFO - Successfully exported 2021-05.
+2025-05-01 23:31:03,208 - INFO - Running export for month: 2021-06
+2025-05-01 23:31:15,730 - INFO - Successfully exported 2021-06.
+2025-05-01 23:31:15,730 - INFO - Running export for month: 2021-07
+2025-05-01 23:31:31,424 - INFO - Successfully exported 2021-07.
+2025-05-01 23:31:31,424 - INFO - Running export for month: 2021-08
+2025-05-01 23:31:54,908 - INFO - Successfully exported 2021-08.
+2025-05-01 23:31:54,908 - INFO - Running export for month: 2021-09
+2025-05-01 23:32:26,873 - INFO - Successfully exported 2021-09.
+2025-05-01 23:32:26,873 - INFO - Running export for month: 2021-10
+2025-05-01 23:32:54,008 - INFO - Successfully exported 2021-10.
+2025-05-01 23:32:54,009 - INFO - Running export for month: 2021-11
+2025-05-01 23:33:09,550 - INFO - Successfully exported 2021-11.
+2025-05-01 23:33:09,550 - INFO - Running export for month: 2021-12
+2025-05-01 23:33:34,824 - INFO - Successfully exported 2021-12.
+2025-05-01 23:33:34,825 - INFO - Running export for month: 2022-01
+2025-05-01 23:34:06,529 - INFO - Successfully exported 2022-01.
+2025-05-01 23:34:06,529 - INFO - Running export for month: 2022-02
+2025-05-01 23:34:57,369 - INFO - Successfully exported 2022-02.
+2025-05-01 23:34:57,370 - INFO - Running export for month: 2022-03
+2025-05-01 23:35:23,193 - INFO - Successfully exported 2022-03.
+2025-05-01 23:35:23,193 - INFO - Running export for month: 2022-04
+2025-05-01 23:35:55,832 - INFO - Successfully exported 2022-04.
+2025-05-01 23:35:55,832 - INFO - Running export for month: 2022-05
+2025-05-01 23:36:08,667 - INFO - Successfully exported 2022-05.
+2025-05-01 23:36:08,667 - INFO - Running export for month: 2022-06
+2025-05-01 23:36:35,792 - INFO - Successfully exported 2022-06.
+2025-05-01 23:36:35,792 - INFO - Running export for month: 2022-07
+2025-05-01 23:36:59,186 - INFO - Successfully exported 2022-07.
+2025-05-01 23:36:59,186 - INFO - Running export for month: 2022-08
+2025-05-01 23:37:26,171 - INFO - Successfully exported 2022-08.
+2025-05-01 23:37:26,172 - INFO - Running export for month: 2022-09
+2025-05-01 23:37:44,028 - INFO - Successfully exported 2022-09.
+2025-05-01 23:37:44,028 - INFO - Running export for month: 2022-10
+2025-05-01 23:38:00,448 - INFO - Successfully exported 2022-10.
+2025-05-01 23:38:00,448 - INFO - Running export for month: 2022-11
+2025-05-01 23:38:25,450 - INFO - Successfully exported 2022-11.
+2025-05-01 23:38:25,450 - INFO - Running export for month: 2022-12
+2025-05-01 23:38:51,846 - INFO - Successfully exported 2022-12.
+2025-05-01 23:38:51,846 - INFO - Running export for month: 2023-01
+2025-05-01 23:39:16,502 - INFO - Successfully exported 2023-01.
+2025-05-01 23:39:16,502 - INFO - Running export for month: 2023-02
+2025-05-01 23:39:29,273 - INFO - Successfully exported 2023-02.
+2025-05-01 23:39:29,273 - INFO - Running export for month: 2023-03
+2025-05-01 23:39:51,301 - INFO - Successfully exported 2023-03.
+2025-05-01 23:39:51,301 - INFO - Running export for month: 2023-04
+2025-05-01 23:40:11,425 - INFO - Successfully exported 2023-04.
+2025-05-01 23:40:11,425 - INFO - Running export for month: 2023-05
+2025-05-01 23:40:21,903 - INFO - Successfully exported 2023-05.
+2025-05-01 23:40:21,903 - INFO - Running export for month: 2023-06
+2025-05-01 23:40:44,655 - INFO - Successfully exported 2023-06.
+2025-05-01 23:40:44,656 - INFO - Running export for month: 2023-07
+2025-05-01 23:41:03,616 - INFO - Successfully exported 2023-07.
+2025-05-01 23:41:03,616 - INFO - Running export for month: 2023-08
+2025-05-01 23:41:27,061 - INFO - Successfully exported 2023-08.
+2025-05-01 23:41:27,061 - INFO - Running export for month: 2023-09
+2025-05-01 23:41:55,923 - INFO - Successfully exported 2023-09.
+2025-05-01 23:41:55,923 - INFO - Running export for month: 2023-10
+2025-05-01 23:42:07,471 - INFO - Successfully exported 2023-10.
+2025-05-01 23:42:07,471 - INFO - Running export for month: 2023-11
+2025-05-01 23:42:43,062 - INFO - Successfully exported 2023-11.
+2025-05-01 23:42:43,063 - INFO - Running export for month: 2023-12
+2025-05-01 23:43:04,777 - INFO - Successfully exported 2023-12.
+2025-05-01 23:43:04,777 - INFO - Running export for month: 2024-01
+2025-05-01 23:43:17,009 - INFO - Successfully exported 2024-01.
+2025-05-01 23:43:17,009 - INFO - Running export for month: 2024-02
+2025-05-01 23:43:39,866 - INFO - Successfully exported 2024-02.
+2025-05-01 23:43:39,867 - INFO - Running export for month: 2024-03
+2025-05-01 23:44:00,490 - INFO - Successfully exported 2024-03.
+2025-05-01 23:44:00,490 - INFO - Running export for month: 2024-04
+2025-05-01 23:44:19,662 - INFO - Successfully exported 2024-04.
+2025-05-01 23:44:19,662 - INFO - Running export for month: 2024-05
+2025-05-01 23:44:30,460 - INFO - Successfully exported 2024-05.
+2025-05-01 23:44:30,460 - INFO - Running export for month: 2024-06
+2025-05-01 23:45:00,970 - INFO - Successfully exported 2024-06.
+2025-05-01 23:45:00,970 - INFO - Running export for month: 2024-07
+2025-05-01 23:45:20,776 - INFO - Successfully exported 2024-07.
+2025-05-01 23:45:20,776 - INFO - Running export for month: 2024-08
+2025-05-01 23:45:44,926 - INFO - Successfully exported 2024-08.
+2025-05-01 23:45:44,926 - INFO - Running export for month: 2024-09
+2025-05-01 23:46:01,323 - INFO - Successfully exported 2024-09.
+2025-05-01 23:46:01,323 - INFO - Running export for month: 2024-10
+2025-05-01 23:46:33,210 - INFO - Successfully exported 2024-10.
+2025-05-01 23:46:33,210 - INFO - Running export for month: 2024-11
+2025-05-01 23:47:10,512 - INFO - Successfully exported 2024-11.
+2025-05-01 23:47:10,513 - INFO - Running export for month: 2024-12
+2025-05-01 23:47:11,482 - INFO - Successfully exported 2024-12.
+2025-05-01 23:47:11,482 - INFO - Running export for month: 2025-01
+2025-05-01 23:47:32,511 - INFO - Successfully exported 2025-01.
+2025-05-01 23:47:32,512 - INFO - Running export for month: 2025-02
+2025-05-01 23:48:08,888 - INFO - Successfully exported 2025-02.
+2025-05-01 23:48:08,888 - INFO - Running export for month: 2025-03
+2025-05-01 23:48:31,569 - INFO - Successfully exported 2025-03.
+2025-05-01 23:48:31,569 - INFO - --- Batch Export Process Finished ---
+2025-05-01 23:48:31,569 - INFO - Successful exports: 51
+2025-05-01 23:48:31,569 - INFO - Failed exports: 0
+2025-05-01 23:48:31,569 - INFO - All monthly exports completed successfully.

@@ -1,7 +1,7 @@
 import json
 import os
 import logging
-from datetime import date
+from datetime import date, datetime
 from typing import List, Dict, Any
 
 logger = logging.getLogger(__name__)
@@ -57,25 +57,36 @@ def generate_filename(period: str, dt: date | None = None, year: int | None = No
     """Generates a filename based on the time period.
     
     Args:
-        period: The time period ('day', 'week', 'month', 'year', 'all').
-        dt: The specific date for day/week periods.
-        year: The specific year for year/month periods.
+        period: The time period ('day', 'week', 'month', 'year', 'all', 'range').
+                Note: 'range' will likely use the start date and fallback filename for now.
+        dt: The specific date, often the start date of the period (used for day, week, month, range).
+        year: The specific year (used primarily for 'year' period, can be derived from dt for others).
 
     Returns:
-        A formatted filename string (e.g., '2023-10-26.json', '2023-W43.json').
+        A formatted filename string (e.g., '2023-10-26.json', '2023-W43.json', '2024-01.json').
     """
-    if period == 'day' and dt:
-        return f"{dt.isoformat()}.json"
-    elif period == 'week' and dt:
-        # ISO week date: YYYY-Www (e.g., 2023-W43)
-        return f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}.json" 
-    elif period == 'month' and year and dt: # Need dt for month number
-        return f"{year}-{dt.month:02d}.json"
-    elif period == 'year' and year:
-        return f"{year}.json"
-    elif period == 'all':
-        return "all_time.json"
-    else:
-        logger.warning(f"Could not generate filename for period '{period}' with provided date/year info.")
-        # Fallback or raise error?
-        return f"export_{datetime.now().strftime('%Y%m%d%H%M%S')}.json" 
+    try:
+        if period == 'day' and dt:
+            return f"{dt.isoformat()}.json"
+        elif period == 'week' and dt:
+            # ISO week date: YYYY-Www (e.g., 2023-W43)
+            return f"{dt.isocalendar().year}-W{dt.isocalendar().week:02d}.json" 
+        elif period == 'month' and dt: # Simplified: rely only on dt when period is month
+            return f"{dt.year}-{dt.month:02d}.json"
+        elif period == 'year' and dt: # Also handle year using dt if available
+            return f"{dt.year}.json"   
+        elif period == 'year' and year: # Fallback if only year is known
+            return f"{year}.json"
+        elif period == 'all':
+            return "all_time.json"
+        else: # Handles 'range' or cases where dt/year might be missing unexpectedly
+            period_qualifier = f"_{period}" if period else ""
+            date_qualifier = f"_{dt.isoformat()}" if dt else ""
+            timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+            fallback_name = f"export{period_qualifier}{date_qualifier}_{timestamp}.json"
+            logger.warning(f"Could not determine specific filename format for period '{period}' with dt='{dt}', year='{year}'. Using fallback: {fallback_name}")
+            return fallback_name
+    except Exception as e:
+        logger.error(f"Error generating filename for period '{period}', dt='{dt}', year='{year}': {e}", exc_info=True)
+        # Fallback in case of unexpected errors during formatting
+        return f"export_error_{datetime.now().strftime('%Y%m%d%H%M%S')}.json" 
