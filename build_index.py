@@ -10,6 +10,7 @@ import faiss
 from openai import OpenAI, RateLimitError, APIError
 import time
 import glob # For handling file globs
+from datetime import datetime # Ensure datetime is imported
 
 # Adjust path to import from the package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
@@ -105,6 +106,47 @@ def embed_batch(client: OpenAI, texts: list[str], retries: int = MAX_EMBEDDING_R
             
     logger.error(f"Failed to get embedding batch after {retries} retries.")
     return None
+
+def extract_and_save_metadata_cache(mapping_data: list[dict], cache_file_path: str):
+    """Extracts distinct values for specified fields and saves them to a cache file."""
+    logger.info("Extracting distinct values for metadata cache...")
+    # Define which fields to extract distinct values from 
+    fields_to_extract = ["Family", "Friends", "Tags"] # Removed "Food"
+    distinct_metadata_values = {field: set() for field in fields_to_extract}
+    extraction_errors = 0
+    
+    for entry in mapping_data:
+        for field in fields_to_extract:
+            value = entry.get(field)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, str) and item: 
+                        distinct_metadata_values[field].add(item)
+            elif value is not None and not isinstance(value, list):
+                 if extraction_errors < 10: 
+                      logger.warning(f"CacheGen: Expected '{field}' to be a list, found {type(value)}. Entry ID: {entry.get('page_id', 'N/A')}")
+                 extraction_errors += 1
+
+    # Convert sets to sorted lists 
+    final_cache_data = {field: sorted(list(values)) for field, values in distinct_metadata_values.items()}
+        
+    logger.info("Finished extracting distinct values for cache.")
+    if extraction_errors > 0:
+        logger.warning(f"CacheGen: Encountered {extraction_errors} unexpected data type issues.")
+
+    # Prepare final cache object
+    cache_content = {
+        "last_updated": datetime.now().isoformat(),
+        "distinct_values": final_cache_data
+    }
+    
+    # Save the cache
+    try:
+        with open(cache_file_path, 'w', encoding='utf-8') as f:
+            json.dump(cache_content, f, indent=2)
+        logger.info(f"Successfully saved metadata cache to {cache_file_path}")
+    except Exception as e:
+        logger.error(f"Failed to save metadata cache to {cache_file_path}: {e}", exc_info=True)
 
 def main():
     parser = argparse.ArgumentParser(description="Build or update a FAISS index from exported Notion data JSON files.")
@@ -237,6 +279,7 @@ def main():
     total_entries_skipped_this_run = 0
     total_embeddings_added_this_run = 0
     files_processed_count = 0
+    logged_one_example = False # Flag to log only once
 
     for file_path in input_files:
         files_processed_count += 1
@@ -246,8 +289,8 @@ def main():
         skipped_in_file = 0
         
         # Batch processing buffers for the current file
-        batch_texts = []
-        batch_metadata = [] # Store corresponding entry dicts for mapping
+        batch_texts_to_embed = [] # Renamed for clarity
+        batch_metadata_for_mapping = [] # Renamed for clarity
 
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
@@ -270,7 +313,7 @@ def main():
 
         # Function to process a completed batch
         def process_embedding_batch(texts_to_embed, metadata_to_map):
-            nonlocal index, dimension, mapping_data, processed_page_ids, total_embeddings_added_this_run, embeddings_added_from_file, skipped_in_file, total_entries_skipped_this_run
+            nonlocal index, dimension, mapping_data, processed_page_ids, total_embeddings_added_this_run, embeddings_added_from_file, skipped_in_file, total_entries_skipped_this_run, logged_one_example
             
             if not texts_to_embed:
                 return
@@ -321,13 +364,30 @@ def main():
                 
                 # If valid, prepare for adding
                 vectors_to_add.append(embedding)
-                mappings_to_add.append({
+                
+                # --- Create the dictionary for index_mapping.json --- 
+                # Start with the essential fields
+                mapping_entry = {
                     "page_id": page_id,
                     "title": entry_data.get('title', '[No Title]'),
                     "entry_date": entry_data.get('entry_date'),
                     "source_file": os.path.basename(file_path),
-                    "content_preview": entry_data.get('content', '')[:200] + ("..." if len(entry_data.get('content', '')) > 200 else "")
-                })
+                    "content": entry_data.get('content', '') # Ensure full content is stored
+                }
+                # Add other relevant metadata fields if they exist in the source entry_data
+                # This ensures Family, Friends, Tags, etc. are carried over
+                # Use Consistent Capitalization matching Notion Properties / Cache Extraction
+                for key in ["Family", "Friends", "Tags", "Food", "AI summary"]:
+                    # Check lowercase key from source (transformers.py output)
+                    source_key = key.lower().replace(' ', '_') # e.g., "AI summary" -> "ai_summary"
+                    # Special case for AI summary potentially
+                    if key == "AI summary": source_key = "ai_summary"
+                        
+                    if source_key in entry_data:
+                        mapping_entry[key] = entry_data[source_key]
+                # --- End dictionary creation ---
+
+                mappings_to_add.append(mapping_entry)
                 ids_processed_in_batch.append(page_id)
 
             # Add batch to index and mapping if any vectors are valid
@@ -351,8 +411,9 @@ def main():
         for i, entry in enumerate(current_entries):
             total_entries_processed_this_run += 1
             page_id = entry.get('page_id')
-            entry_title = entry.get('title', '[No Title]')
+            entry_title = entry.get('title', '[No Title]') # Get title early for logging
 
+            # --- Skip checks (ID, duplicate, content) ---
             if not page_id:
                 logger.warning(f"Entry {i+1}/{entries_in_file} in {file_path} (Title: '{entry_title}') missing page_id. Skipping.")
                 skipped_in_file += 1
@@ -363,29 +424,61 @@ def main():
                 skipped_in_file += 1
                 continue
 
-            content_to_embed = entry.get('content', '')
-            if not content_to_embed or not content_to_embed.strip():
-                logger.warning(f"Entry {i+1}/{entries_in_file} (ID: {page_id}, Title: '{entry_title}') has empty/blank content. Skipping embedding.")
+            content = entry.get('content', '')
+            # Skip if the main content block is empty/whitespace
+            if not content or not content.strip():
+                logger.warning(f"Entry {i+1}/{entries_in_file} (ID: {page_id}, Title: '{entry_title}') has empty/blank block content. Skipping embedding.")
                 skipped_in_file += 1
                 continue
             
-            # Add to current batch
-            batch_texts.append(content_to_embed)
-            batch_metadata.append(entry) # Keep the original entry dict for mapping creation later
+            # --- Construct enriched text for embedding --- 
+            metadata_parts = []
+            # Use the specific keys identified from transformers.py
+            if entry_title != '[No Title]':
+                 metadata_parts.append(f"Title: {entry_title}")
+            if entry.get('entry_date'):
+                 metadata_parts.append(f"Date: {entry['entry_date']}")
+            if entry.get('tags'):
+                 metadata_parts.append(f"Tags: {", ".join(entry['tags'])}")
+            if entry.get('food'):
+                 metadata_parts.append(f"Food: {", ".join(entry['food'])}")
+            if entry.get('friends'):
+                 metadata_parts.append(f"Friends: {", ".join(entry['friends'])}")
+            if entry.get('family'):
+                 metadata_parts.append(f"Family: {", ".join(entry['family'])}")
+            if entry.get('ai_summary'):
+                 metadata_parts.append(f"AI Summary: {entry['ai_summary']}")
+                 
+            # Combine metadata and content
+            # Add newlines between parts for clarity and potentially better embedding distinction
+            combined_text_for_embedding = "\n".join(metadata_parts) + "\n\nContent:\n" + content
+            
+            # --- >>> ADD DEBUG LOGGING (ONCE) <<< ---
+            if not logged_one_example:
+                logger.info("--- EXAMPLE EMBEDDING TEXT START ---")
+                logger.info(combined_text_for_embedding)
+                logger.info("--- EXAMPLE EMBEDDING TEXT END ---")
+                logged_one_example = True
+            # --- >>> END DEBUG LOGGING <<< ---
+            
+            # --- Add to current batch --- 
+            batch_texts_to_embed.append(combined_text_for_embedding) 
+            batch_metadata_for_mapping.append(entry) 
             
             # If batch is full, process it
-            if len(batch_texts) >= BATCH_SIZE:
-                process_embedding_batch(batch_texts, batch_metadata)
+            if len(batch_texts_to_embed) >= BATCH_SIZE:
+                # Pass the correct buffers to the processing function
+                process_embedding_batch(batch_texts_to_embed, batch_metadata_for_mapping)
                 # Clear the batch buffers
-                batch_texts = []
-                batch_metadata = []
+                batch_texts_to_embed = []
+                batch_metadata_for_mapping = []
         
         # Process any remaining items in the last batch for this file
-        if batch_texts:
-            logger.info(f"Processing final batch of {len(batch_texts)} entries for {file_path}...")
-            process_embedding_batch(batch_texts, batch_metadata)
-            batch_texts = [] # Clear just in case
-            batch_metadata = []
+        if batch_texts_to_embed:
+            logger.info(f"Processing final batch of {len(batch_texts_to_embed)} entries for {file_path}...")
+            process_embedding_batch(batch_texts_to_embed, batch_metadata_for_mapping)
+            batch_texts_to_embed = [] 
+            batch_metadata_for_mapping = []
         
         # Update total skips and log file summary
         total_entries_skipped_this_run += skipped_in_file
@@ -438,6 +531,14 @@ def main():
              logger.error("One or both final save operations failed. Index and mapping may be corrupt or out of sync!")
     else:
          logger.warning("No embeddings generated or index not initialized. Nothing to save.")
+
+    # --- Final Save & Summary --- 
+    final_mapping_data = mapping_data # Assuming mapping_data holds the final full map here
+    
+    # --- >>> NEW: Generate and Save Metadata Cache <<< ---
+    metadata_cache_file = "metadata_cache.json" # Define cache filename
+    extract_and_save_metadata_cache(final_mapping_data, metadata_cache_file)
+    # --- >>> END: Generate and Save Metadata Cache <<< ---
 
     # --- Summary Logging ---
     logger.info("--- Index build/update process finished ---")
