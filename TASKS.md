@@ -1,6 +1,6 @@
-# Notion Second Brain - Phase 1 Implementation
+# Notion Second Brain - Phase 1 MVP RAG Implementation
 
-Tracking progress for the initial MVP (Phase 1) of the Notion Second Brain project, focusing on data extraction and basic export.
+Tracking progress for the initial MVP RAG Demo focusing on a basic query loop.
 
 ## Completed Tasks
 
@@ -38,27 +38,47 @@ Tracking progress for the initial MVP (Phase 1) of the Notion Second Brain proje
   - [x] Implement main script logic: initialize client, query pages, retrieve blocks, extract content, filter, save to JSON.
   - [x] Optimize `cli.py` to use Notion API filters for queries (instead of local filtering)
   - [x] Transform raw Notion page object to simpler JSON structure before saving
-
-## In Progress Tasks
-
 - [x] **Phase 1 Refinements & Setup:**
   - [x] Initialize Git repository (`git init`)
   - [x] Create project virtual environment (e.g., `python3 -m venv venv`)
-  - [ ] Add basic logging configuration (partially done in CLI, formalize?)
-  - [ ] Implement better error handling in `cli.py` and core modules
-  - [ ] Add more robust metadata to JSON exports
+  - [x] Retrieve Notion database schema to identify all property types
+  - [x] Add handlers for all used property types in `processing/transformers.py` (Verified existing code handles required types)
+  - [x] Add basic logging configuration (Centralized in `config.py`)
+  - [x] Implement better error handling in `cli.py` and core modules (API rate limit retry added)
+- [x] **Project Setup & Documentation:**
+  - [x] Create `design/` directory for technical design documents
+  - [x] Create `design/MVP_RAG_TDD.md` outlining the MVP RAG plan
 
-## Future Tasks
+## MVP RAG - In Progress Tasks (Midnight Sprint!)
 
-(Based on README Phases/Plan - refine as needed)
+- [x] **Setup & Dependencies:**
+  - [x] Add `openai`, `faiss-cpu` to `requirements.txt`
+  - [x] Add `OPENAI_API_KEY` to `.env.example` (User must add to `.env`)
+- [ ] **Offline Indexing (`build_index.py`):**
+  - [ ] Create `build_index.py` script skeleton
+- [ ] **CLI Query Handling (`cli.py`):**
+  - [ ] Add `--query` argument to `argparse`
+  - [ ] Add logic to `main()` to handle `--query` mode
+  - [ ] Load FAISS index and mapping file
+  - [ ] Implement OpenAI embedding for user query
+  - [ ] Implement FAISS similarity search (top k)
+  - [ ] Implement context retrieval from mapping
+  - [ ] Implement basic prompt construction
+  - [ ] Implement OpenAI chat completion call
+  - [ ] Print LLM response to console
 
-- [ ] **Phase 1 Testing (Week 4):**
+## Future Tasks (Post-MVP)
+
+(Based on README Phases/Plan & TDD - refine as needed)
+
+- [ ] **Phase 1 Testing - POSTPONED for MVP:**
   - [ ] Write unit tests for `notion/api.py` (`tests/test_notion_api.py`)
   - [ ] Write unit tests for `processing/filters.py`
   - [ ] Write unit tests for `notion/extractors.py` (`tests/test_data_processing.py`?)
-  - [ ] Write integration tests for the `cli.py` extraction process
-  - [ ] Handle edge cases (e.g., empty database, invalid date formats, API rate limits)
-  - [ ] Improve logging and monitoring
+  - [ ] Write unit tests for RAG components (`build_index.py`, CLI query logic)
+  - [ ] Write integration tests for the `cli.py` extraction and query processes
+  - [ ] Handle edge cases (e.g., empty database, invalid date formats, API rate limits, no JSON export, missing index files)
+  - [ ] Improve logging and monitoring (especially for RAG)
   - [ ] Document code (docstrings) and API usage (`docs/api_usage.md`)
 - [ ] **Phase 2: Data Processing and Storage:**
   - [ ] Enhance `extract_text_from_block` for more block types (e.g., toggles children, tables)
@@ -74,31 +94,35 @@ Tracking progress for the initial MVP (Phase 1) of the Notion Second Brain proje
   - [ ] Implement chunking strategies
   - [ ] Design metadata structure for improved retrieval
   - [ ] Build utility functions for data preparation (`processing/transformers.py`?)
-- [ ] **Phase 3: Query Interface:**
-  - [ ] Enhance `cli.py` with query capabilities
-  - [ ] Implement basic search functionality in CLI
-  - [ ] Add reporting and statistics features to CLI
-  - [ ] Integrate with OpenAI or Claude API (`LLM Integration`)
-  - [ ] Implement RAG pattern
-  - [ ] Create prompt templates
-  - [ ] Build context window management
+- [ ] **Phase 3: Query Interface & RAG Enhancements:**
+  - [ ] **3.1 CLI Enhancements:**
+    - [ ] Enhance `cli.py` query capabilities (e.g., specify k, show sources)
+    - [ ] Implement basic search functionality in CLI (maybe redundant with RAG?)
+    - [ ] Add reporting and statistics features to CLI
+  - [ ] **3.2 LLM Integration (RAG) - Robust Implementation:**
+    - [ ] Refine RAG system architecture (based on MVP learnings)
+    - [ ] Evaluate & Choose/set up Vector Database (Pinecone, Weaviate, ChromaDB?)
+    - [ ] Implement robust indexing pipeline (chunking, embedding, metadata storage)
+    - [ ] Implement retrieval logic (semantic search + metadata filtering)
+    - [ ] Integrate with OpenAI or Claude API (configurable?)
+    - [ ] Improve prompt templates & context window management
 - [ ] **Phase 4: Web Interface (Future):**
   - [ ] Design and implement Backend API (Flask/FastAPI)
   - [ ] Design and implement Frontend (React/Next.js)
 
 ## Implementation Plan
 
-Currently focusing on completing Phase 1 (MVP) including testing and documentation.
+**Current Focus:** Execute the "MVP RAG - In Progress Tasks" list ASAP for demo.
 
 ### Relevant Files
 
 - `README.md` - Project overview and plan ✅
 - `.gitignore` - Specifies intentionally untracked files ✅
-- `requirements.txt` - Project dependencies (`python-dotenv`, `requests`) ✅
-- `.env.example` - Example environment variable file ✅
-- `cli.py` - Command-line interface script ✅
+- `requirements.txt` - Project dependencies (`python-dotenv`, `requests`) ⏳ (Needs update)
+- `.env.example` - Example environment variable file ⏳ (Needs update)
+- `cli.py` - Command-line interface script ⏳ (Needs RAG logic)
 - `notion_second_brain/__init__.py` - Package marker ✅
-- `notion_second_brain/config.py` - Handles loading environment variables ✅
+- `notion_second_brain/config.py` - Handles loading environment variables & logging ✅
 - `notion_second_brain/notion/__init__.py` - Notion sub-package marker ✅
 - `notion_second_brain/notion/api.py` - Notion API client ✅
 - `notion_second_brain/notion/extractors.py` - Extracts text from Notion blocks ✅
@@ -108,8 +132,11 @@ Currently focusing on completing Phase 1 (MVP) including testing and documentati
 - `notion_second_brain/storage/json_storage.py` - Saves entries to JSON files ✅
 - `.cursor/rules/task-list.mdc` - Cursor rule for task management ✅
 - `notion_second_brain/processing/transformers.py` - Transforms raw Notion data to simpler format ✅
+- `design/MVP_RAG_TDD.md` - Technical design for RAG MVP ✅
+- `build_index.py` - (New) Script to create FAISS index ⏳ (Needs creation)
+- `index.faiss` - (Generated) FAISS index file ⏳
+- `index_mapping.json` - (Generated) Index mapping file ⏳
 
 (Future files)
 - `tests/` - Directory for test code
 - `docs/` - Directory for documentation
-- `notion_second_brain/processing/transformers.py` - For LLM data transformations 

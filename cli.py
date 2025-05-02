@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, date, timedelta
 import sys
 import os
+import json # Import json for pretty printing
 
 # Adjust path to import from the package
 # This assumes cli.py is in the root and the package is notion_second_brain/
@@ -17,12 +18,9 @@ from notion_second_brain import config # To check if config loaded ok
 from notion_second_brain.processing.transformers import transform_page_to_simple_dict # Import the new transformer
 
 # --- Logging Setup ---
-log_format = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
-logging.basicConfig(level=logging.INFO, format=log_format)
-logger = logging.getLogger("cli")
-# Set requests logger level higher to avoid excessive debug messages
-logging.getLogger("requests").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
+# Removed old basicConfig setup
+# Centralized logging setup will be called from main()
+logger = logging.getLogger("cli") # Still get a logger specific to this module
 
 # --- Helper Function for Notion Filter ---
 def build_notion_filter_from_args(args):
@@ -102,50 +100,63 @@ def build_notion_filter_from_args(args):
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Extract journal entries from Notion.")
 
-    parser.add_argument(
+    # --- Action Group ---
+    action_group = parser.add_argument_group(title='Actions')
+    action_group.add_argument(
         "--test-connection",
         action="store_true",
         help="Test the connection to the Notion API and exit."
     )
-    parser.add_argument(
+    action_group.add_argument(
+        "--schema",
+        action="store_true",
+        help="Retrieve and display the database schema (properties) and exit."
+    )
+
+    # --- Filtering Group ---
+    filter_group = parser.add_argument_group(title='Filtering Options')
+    filter_group.add_argument(
         "-p", "--period",
         choices=['day', 'week', 'month', 'year', 'all', 'range'],
         default='all',
-        help="Time period to filter entries for (default: all)."
+        help="Time period to filter entries for (default: all). Ignored if --schema is used."
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "--date",
-        help="Target date for 'day' or 'week' period (YYYY-MM-DD). Defaults to today."
+        help="Target date for 'day' or 'week' period (YYYY-MM-DD). Defaults to today. Ignored if --schema is used."
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "--month",
         type=int,
-        help="Target month (1-12) for 'month' period. Requires --year."
+        help="Target month (1-12) for 'month' period. Requires --year. Ignored if --schema is used."
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "--year",
         type=int,
-        help="Target year (YYYY) for 'month' or 'year' period."
+        help="Target year (YYYY) for 'month' or 'year' period. Ignored if --schema is used."
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "--start-date",
-        help="Start date for 'range' period (YYYY-MM-DD)."
+        help="Start date for 'range' period (YYYY-MM-DD). Ignored if --schema is used."
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "--end-date",
-        help="End date for 'range' period (YYYY-MM-DD). Defaults to today if start date is given."
+        help="End date for 'range' period (YYYY-MM-DD). Defaults to today if start date is given. Ignored if --schema is used."
     )
-    parser.add_argument(
+    filter_group.add_argument(
         "--date-property",
         default="created_time",
-        help="Notion property to use for date filtering (default: created_time). Can be 'created_time' or the name of a date property in your database."
+        help="Notion property to use for date filtering (default: created_time). Can be 'created_time' or the name of a date property in your database. Ignored if --schema is used."
     )
-    parser.add_argument(
+    
+    # --- Output/Config Group ---
+    output_group = parser.add_argument_group(title='Output & Configuration')
+    output_group.add_argument(
         "-o", "--output-dir",
         default="output",
-        help="Directory to save the output JSON files (default: output)."
+        help="Directory to save the output JSON files (default: output). Ignored if --schema is used."
     )
-    parser.add_argument(
+    output_group.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Enable verbose logging (DEBUG level)."
@@ -153,30 +164,46 @@ def parse_arguments():
     
     args = parser.parse_args()
 
-    # Basic validation
-    if args.period == 'month' and not (args.year and args.month):
-        parser.error("--period 'month' requires --year and --month.")
-    if args.period == 'year' and not args.year:
-        parser.error("--period 'year' requires --year.")
-    if args.period == 'range' and not args.start_date:
-         parser.error("--period 'range' requires --start-date.")
-         
+    # Basic validation (only if not testing connection or getting schema)
+    if not args.test_connection and not args.schema:
+        if args.period == 'month' and not (args.year and args.month):
+            parser.error("--period 'month' requires --year and --month.")
+        if args.period == 'year' and not args.year:
+            parser.error("--period 'year' requires --year.")
+        if args.period == 'range' and not args.start_date:
+             parser.error("--period 'range' requires --start-date.")
+             
     # Set logging level based on verbosity
-    if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
-        for handler in logging.getLogger().handlers:
-            handler.setLevel(logging.DEBUG)
-        logger.info("Verbose logging enabled.")
+    # The actual logger configuration is moved to main()
+    # We just determine the level here.
+    log_level = logging.DEBUG if args.verbose else logging.INFO
 
-    return args
+    return args, log_level # Return log_level as well
 
 # --- Main Logic ---
 def main():
-    args = parse_arguments()
+    args, log_level = parse_arguments() # Get args and desired log level
 
+    # --- Setup Logging FIRST ---
+    # Use the centralized function from config.py
+    config.setup_logging(level=log_level) 
+
+    # --- Now proceed with the rest of the script ---
     logger.info("Initializing Notion client...")
     try:
-        client = NotionClient()
+        # Make sure NOTION_TOKEN and DATABASE_ID are loaded
+        if not config.NOTION_TOKEN or not config.DATABASE_ID:
+             # Logging is now available before this check
+             logger.error("Missing NOTION_TOKEN or DATABASE_ID in environment or .env file.")
+             sys.exit(1)
+        
+        # --- DEBUG: Print the loaded Database ID ---
+        # Remove this debug line now that the ID issue is resolved
+        # logger.info(f"Using Database ID from config: {config.DATABASE_ID}") 
+        # --- END DEBUG ---
+
+        client = NotionClient(token=config.NOTION_TOKEN)
+        db_id = config.DATABASE_ID # Use the configured DB ID
     except ValueError as e:
         logger.error(f"Configuration error: {e}")
         sys.exit(1)
@@ -186,14 +213,39 @@ def main():
 
     if args.test_connection:
         logger.info("Testing Notion connection...")
-        if client.test_connection():
+        if client.test_connection(database_id=db_id):
             logger.info("Notion connection successful!")
             sys.exit(0)
         else:
-            logger.error("Notion connection failed. Check token and database ID.")
+            logger.error(f"Notion connection failed. Check token and database ID.")
             sys.exit(1)
 
-    # --- Build Filter --- 
+    if args.schema:
+        output_filename = "schema.json"
+        logger.info(f"Retrieving schema for database ID: {db_id} and saving to {output_filename}")
+        try:
+            schema_data = client.retrieve_database_schema(database_id=db_id)
+            if schema_data and 'properties' in schema_data:
+                properties_data = schema_data['properties']
+                with open(output_filename, 'w') as f:
+                    json.dump(properties_data, f, indent=2)
+                logger.info(f"Successfully saved database properties to {output_filename}")
+                sys.exit(0)
+            elif schema_data:
+                # If 'properties' key is missing, save the whole schema object for inspection
+                logger.warning("Schema retrieved but no 'properties' key found. Saving entire schema object.")
+                with open(output_filename, 'w') as f:
+                    json.dump(schema_data, f, indent=2)
+                logger.info(f"Successfully saved entire schema object to {output_filename}")
+                sys.exit(1) # Exit with error code since properties were missing
+            else:
+                 logger.error("Failed to retrieve database schema.")
+                 sys.exit(1)
+        except Exception as e:
+            logger.error(f"An error occurred while retrieving or saving schema: {e}")
+            sys.exit(1)
+
+    # --- Build Filter --- (Only if not testing connection or getting schema)
     notion_filter = None
     target_dt_for_filename = None # Store the date needed for filename generation
     if args.period != 'all':
