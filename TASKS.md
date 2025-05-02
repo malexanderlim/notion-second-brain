@@ -1,6 +1,6 @@
 # Notion Second Brain - Phase 1 MVP RAG Implementation
 
-Tracking progress for the initial MVP RAG Demo focusing on a basic query loop.
+Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 
 ## Completed Tasks
 
@@ -48,6 +48,26 @@ Tracking progress for the initial MVP RAG Demo focusing on a basic query loop.
 - [x] **Project Setup & Documentation:**
   - [x] Create `design/` directory for technical design documents
   - [x] Create `design/MVP_RAG_TDD.md` outlining the MVP RAG plan
+- [x] **Implement Hybrid RAG (Metadata Filtering with Dynamic Values + Semantic Search):**
+  - [x] **Extract Distinct Metadata Values:**
+    - [x] In `cli.py` (`handle_query`), after loading `index_mapping.json`, implement logic to iterate through it.
+    - [x] Extract unique string values for key filterable list/multi-select fields (e.g., `Family`, `Friends`, `Tags`). Store efficiently (e.g., dict of sets).
+    - [x] **Caching:** Store/load these distinct values in `build_index.py` and `cli.py` using `metadata_cache.json`.
+  - [x] **Query Analysis:**
+    - [x] Update `analyze_query_for_filters` prompt to accept and utilize distinct values.
+    - [x] Ensure LLM correctly maps query terms (names, tags) using distinct values.
+    - [x] Ensure LLM correctly extracts date ranges.
+  - [x] **Pre-Filtering:**
+    - [x] In `cli.py` (`handle_query`), use the parsed filters to pre-filter `mapping_data` based on dates and field values.
+    - [x] Handle OR logic correctly for name filters across 'Family'/'Friends'.
+  - [x] **Targeted Semantic Search:**
+    - [x] Use FAISS `IDSelectorBatch` (or similar) to restrict `index.search` to the pre-filtered indices.
+    - [x] Handle the case where pre-filtering yields zero results.
+  - [x] **Final Answer Generation:**
+    - [x] Use the results from the targeted search to retrieve context (full content).
+    - [x] Send context + query to the final LLM (`gpt-4o`).
+    - [x] Refine final prompt to handle specific inferences (e.g., tagged = seen) and formatting (dates, links).
+- [x] Create `TECHNICAL_LEARNINGS.md` summarizing RAG development insights.
 
 ## MVP RAG - In Progress Tasks (Midnight Sprint!)
 
@@ -137,6 +157,15 @@ Tracking progress for the initial MVP RAG Demo focusing on a basic query loop.
   - [ ] Display LLM response in UI
   - [ ] (Optional Stretch) Display token counts / estimated cost for OpenAI calls
   - [ ] (Optional Stretch) Add dropdown/option to select LLM model
+
+## Deprecated Tasks
+
+- [-] **Debug RAG Metadata Query Accuracy:** (Superseded by Hybrid RAG approach)
+  - [-] Verify embedded text structure: Add debug log to `build_index.py` for `combined_text_for_embedding`.
+  - [-] (Conditional) Re-run `build_index.py --force-rebuild` if logged structure is incorrect.
+  - [-] Increase retrieval count: Modify `cli.py` to set `TOP_K = 30`.
+  - [-] Refine LLM guidance: Modify system prompt in `cli.py`.
+  - [-] Test metadata-specific queries (e.g., involving names, tags, dates).
 
 ## Implementation Plan
 

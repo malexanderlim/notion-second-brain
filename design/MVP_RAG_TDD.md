@@ -106,11 +106,8 @@ The existing `cli.py` script will be modified.
 *   **UI:** Consider a web interface or other query methods.
 *   **Cost/Performance:** Analyze and optimize API usage and indexing/query speed.
 *   **Configuration:** Make index paths, models, top-k values configurable.
+*   **(Note:** The actual implementation evolved significantly beyond this initial MVP, incorporating metadata pre-filtering and dynamic value analysis. See `TECHNICAL_LEARNINGS.md` for details on the final hybrid approach.)
 
 ## 7. Dependencies to Add
 
-*   `requirements.txt`:
-    *   `openai`
-    *   `faiss-cpu` (or `faiss-gpu`)
-*   `.env.example`:
-    *   `OPENAI_API_KEY=""` 
+*   `
