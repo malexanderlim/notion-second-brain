@@ -96,67 +96,49 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 
 (Based on README Phases/Plan & TDD - refine as needed)
 
-- [ ] **Phase 1 Testing - POSTPONED for MVP:**
-  - [ ] Write unit tests for `notion/api.py` (`tests/test_notion_api.py`)
-  - [ ] Write unit tests for `processing/filters.py`
-  - [ ] Write unit tests for `notion/extractors.py` (`tests/test_data_processing.py`?)
-  - [ ] Write unit tests for RAG components (`build_index.py`, CLI query logic)
-  - [ ] Write integration tests for the `cli.py` extraction and query processes
-  - [ ] Handle edge cases (e.g., empty database, invalid date formats, API rate limits, no JSON export, missing index files)
-  - [ ] Improve logging and monitoring (especially for RAG)
-  - [ ] Document code (docstrings) and API usage (`docs/api_usage.md`)
-- [ ] **Phase 2: Data Processing and Storage:**
-  - [ ] Enhance `extract_text_from_block` for more block types (e.g., toggles children, tables)
-  - [ ] Add support for handling image references (e.g., save URL, download?)
-  - [ ] Create summary statistics for journal entries
-  - [ ] Implement topic extraction or categorization
-  - [ ] Design a more robust storage system (beyond simple JSON files?)
-  - [ ] Implement incremental sync functionality
-  - [ ] Add versioning for exported data
-  - [ ] Create a data update pipeline
-- [ ] **Phase 2.3: Data Transformation for LLMs:**
-  - [ ] Create embedding generation for entries
-  - [ ] Implement chunking strategies
-  - [ ] Design metadata structure for improved retrieval
-  - [ ] Build utility functions for data preparation (`processing/transformers.py`?)
-- [ ] **Phase 3: Query Interface & RAG Enhancements:**
-  - [ ] **3.1 CLI Enhancements:**
-    - [ ] Enhance `cli.py` query capabilities (e.g., specify k, show sources)
-    - [ ] Implement basic search functionality in CLI (maybe redundant with RAG?)
-    - [ ] Add reporting and statistics features to CLI
-  - [ ] **3.2 LLM Integration (RAG) - Robust Implementation:**
-    - [ ] Refine RAG system architecture (based on MVP learnings)
-    - [ ] Evaluate & Choose/set up Vector Database (Pinecone, Weaviate, ChromaDB?)
-    - [ ] Implement robust indexing pipeline (chunking, embedding, metadata storage)
-    - [ ] Implement retrieval logic (semantic search + metadata filtering)
-    - [ ] Integrate with OpenAI or Claude API (configurable?)
-    - [ ] Improve prompt templates & context window management
-- [ ] **Phase 4: Web Interface (Future):**
-  - [ ] Design and implement Backend API (Flask/FastAPI)
-  - [ ] Design and implement Frontend (React/Next.js)
+- [ ] **Operationalization & Sync:**
+  - [ ] Finalize strategy for ongoing synchronization (See `design/ROLLOUT_SYNC_PLAN_TDD.md`). Key considerations:
+    - Confirm use of `last_edited_time` for detecting changes.
+    - Determine frequency of sync runs (e.g., daily, weekly, manual trigger).
+    - Design robust error handling for sync failures.
+    - Consider how to handle page deletions (remove from index?).
+  - [ ] Implement the chosen synchronization solution (likely involving scheduled runs of `cli.py --export-month` and `build_index.py`).
 
-- [ ] **Phase 5: Operationalization & Sync:**
-  - [ ] Create `design/ROLLOUT_SYNC_PLAN_TDD.md` (Initial draft created)
-  - [ ] Finalize strategy for initial indexing (1600+ entries)
-  - [ ] Finalize strategy for ongoing synchronization
-  - [ ] **Implement Initial Indexing (Batch Rollout):**
-    - [ ] Modify `cli.py` to support `--month YYYY-MM` export argument & filtering logic.
-    - [ ] Create control script (`scripts/batch_export.py`) to run monthly exports.
-    - [ ] Modify `build_index.py` to process multiple JSON files incrementally.
-    - [ ] Modify `build_index.py` to load/save existing index/mapping for checkpointing.
-    - [ ] Modify `build_index.py` to use batch embedding requests.
-    - [ ] Execute batch export (`scripts/batch_export.py`) for all historical data.
-    - [ ] Execute index build (`build_index.py`) for all historical data.
-  - [ ] Implement synchronization solution
+- [ ] **Web Interface (Hyper-MVP):**
+  - [ ] Design basic UI (query input, answer display, perhaps retrieved sources).
+  - [ ] Implement backend API endpoint (e.g., Flask/FastAPI) to wrap `cli.py --query` logic.
+  - [ ] Ensure proper handling of dependencies and environment for the web server.
+  - [ ] Connect UI to backend, displaying formatted answer and links.
 
-- [ ] **Phase 4: Web Interface (Hyper-MVP):**
-  - [ ] Choose simple web framework (e.g., Streamlit, Gradio, basic Flask)
-  - [ ] Create basic UI with input box for query and area for displaying response
-  - [ ] Create backend endpoint/logic to receive query
-  - [ ] Reuse/adapt `cli.py` query logic (loading index, embedding, search, prompting, LLM call)
-  - [ ] Display LLM response in UI
-  - [ ] (Optional Stretch) Display token counts / estimated cost for OpenAI calls
-  - [ ] (Optional Stretch) Add dropdown/option to select LLM model
+- [ ] **Further RAG Enhancements:**
+  - [ ] **Model Exploration:**
+    - [ ] Evaluate alternative/newer embedding models (e.g., OpenAI text-embedding-3-small/large, local models like Sentence Transformers) for potential cost/performance/accuracy benefits.
+    - [ ] Test alternative final answer generation models (e.g., other OpenAI models, Anthropic Claude models via API) for cost/accuracy trade-offs.
+  - [ ] **Chunking Strategy:** Investigate alternatives to embedding entire entries. Explore fixed-size, sentence-based, or content-aware chunking to potentially improve retrieval specificity and reduce context size.
+  - [ ] **Retrieval Tuning:**
+    - [ ] Experiment with different `TOP_K` values and analyze the cost/accuracy trade-off more formally.
+    - [ ] Consider dynamic `TOP_K` based on query type or initial filter results.
+    - [ ] Explore re-ranking retrieved results before sending to LLM (e.g., using a cross-encoder).
+  - [ ] **Prompt Engineering:**
+    - [ ] Further refine system/user prompts for query analysis and final answer generation.
+    - [ ] Experiment with different prompt structures (e.g., few-shot examples).
+    - [ ] Improve handling of the "tagged = seen" assumption (e.g., injecting text notes into context, or implementing two-stage logic for counting vs. content queries).
+  - [ ] **Query Processing:**
+    - [ ] Implement query decomposition for complex questions involving multiple parts or constraints.
+    - [ ] Enhance query safety check (e.g., more nuanced topic detection, stricter default behavior on error).
+  - [ ] **Vector DB:** Evaluate migrating from local FAISS to a managed vector database (Pinecone, Weaviate, ChromaDB, etc.) for scalability and easier management, especially if syncing becomes frequent.
+  - [ ] **Cost Management:** Implement token usage tracking and estimated cost calculation per query, potentially displaying it in the UI.
+  - [ ] **Configuration:** Move more hardcoded values (models, paths, `TOP_K`, prompts) to a configuration file or environment variables.
+
+- [ ] **Testing & Reliability:**
+  - [ ] Implement comprehensive unit tests for core modules (API client, extractors, transformers, storage, RAG components).
+  - [ ] Implement integration tests for `cli.py` export and query workflows.
+  - [ ] Add specific tests for edge cases (empty results, API errors, invalid inputs, context limits).
+  - [ ] Improve error handling and provide more informative user messages (e.g., when pre-filtering yields no results, when safety check fails, when LLM refuses to answer).
+
+- [ ] **Data Handling:**
+  - [ ] Re-evaluate handling of entries with empty content during indexing (currently skipped).
+  - [ ] Enhance `extract_text_from_block` for more block types if needed based on journal usage (e.g., toggles, tables).
 
 ## Deprecated Tasks
 
