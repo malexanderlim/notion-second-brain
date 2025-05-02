@@ -119,7 +119,14 @@ Tracking progress for the initial MVP RAG Demo focusing on a basic query loop.
   - [ ] Create `design/ROLLOUT_SYNC_PLAN_TDD.md` (Initial draft created)
   - [ ] Finalize strategy for initial indexing (1600+ entries)
   - [ ] Finalize strategy for ongoing synchronization
-  - [ ] Implement initial indexing solution
+  - [ ] **Implement Initial Indexing (Batch Rollout):**
+    - [ ] Modify `cli.py` to support `--month YYYY-MM` export argument & filtering logic.
+    - [ ] Create control script (`scripts/batch_export.py`) to run monthly exports.
+    - [ ] Modify `build_index.py` to process multiple JSON files incrementally.
+    - [ ] Modify `build_index.py` to load/save existing index/mapping for checkpointing.
+    - [ ] Modify `build_index.py` to use batch embedding requests.
+    - [ ] Execute batch export (`scripts/batch_export.py`) for all historical data.
+    - [ ] Execute index build (`build_index.py`) for all historical data.
   - [ ] Implement synchronization solution
 
 - [ ] **Phase 4: Web Interface (Hyper-MVP):**
@@ -161,3 +168,12 @@ Tracking progress for the initial MVP RAG Demo focusing on a basic query loop.
 (Future files)
 - `tests/` - Directory for test code
 - `docs/` - Directory for documentation
+
+- [x] **Implement Initial Indexing (Batch Rollout):**
+  - [x] Modify `cli.py` to support `--month YYYY-MM` export argument & filtering logic.
+  - [x] Create control script (`scripts/batch_export.py`) to run monthly exports.
+  - [x] Modify `build_index.py` to process multiple JSON files incrementally.
+  - [x] Modify `build_index.py` to load/save existing index/mapping for checkpointing.
+  - [x] Modify `build_index.py` to use batch embedding requests.
+  - [x] Execute batch export (`scripts/batch_export.py`) for all historical data.
+  - [x] Execute index build (`build_index.py`) for all historical data.

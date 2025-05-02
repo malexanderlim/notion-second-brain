@@ -9,6 +9,7 @@ import numpy as np
 import faiss
 from openai import OpenAI, RateLimitError, APIError
 import time
+import glob # For handling file globs
 
 # Adjust path to import from the package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
@@ -19,19 +20,26 @@ from notion_second_brain import config # Use centralized logging and config
 logger = logging.getLogger("build_index")
 
 # Constants (Consider moving to config or making CLI args if more flexibility needed)
-DEFAULT_INPUT_JSON = "output/all_time.json" # Assuming the full export is run first
+# DEFAULT_INPUT_JSON = "output/all_time.json" # No longer a single default
+DEFAULT_INPUT_GLOB = "output/*.json" # Default to process all JSONs in output
 DEFAULT_INDEX_FILE = "index.faiss"
 DEFAULT_MAPPING_FILE = "index_mapping.json"
 EMBEDDING_MODEL = "text-embedding-ada-002"
 # Simple retry logic for embedding API calls
 MAX_EMBEDDING_RETRIES = 3
 EMBEDDING_RETRY_DELAY = 5 # seconds
+BATCH_SIZE = 100 # Number of texts to send in each embedding request
 
 def get_embedding(client: OpenAI, text: str, retries: int = MAX_EMBEDDING_RETRIES) -> list[float] | None:
     """Gets embedding for text using OpenAI API with retry logic."""
     attempt = 0
     while attempt < retries:
         try:
+            # Ensure input is not empty
+            if not text or not text.strip():
+                 logger.warning("Attempted to get embedding for empty string. Skipping.")
+                 return None
+            
             response = client.embeddings.create(
                 input=text,
                 model=EMBEDDING_MODEL
@@ -42,6 +50,10 @@ def get_embedding(client: OpenAI, text: str, retries: int = MAX_EMBEDDING_RETRIE
             logger.warning(f"Rate limit hit for embedding, attempt {attempt}/{retries}. Retrying in {EMBEDDING_RETRY_DELAY}s... Error: {e}")
             time.sleep(EMBEDDING_RETRY_DELAY)
         except APIError as e:
+            # Handle potential context length errors specifically if possible
+            if "context_length_exceeded" in str(e):
+                 logger.error(f"Context length exceeded for text snippet: '{text[:100]}...'. Skipping entry.")
+                 return None # Cannot retry this error
             attempt += 1
             logger.warning(f"API error during embedding, attempt {attempt}/{retries}. Retrying in {EMBEDDING_RETRY_DELAY}s... Error: {e}")
             time.sleep(EMBEDDING_RETRY_DELAY)
@@ -51,22 +63,71 @@ def get_embedding(client: OpenAI, text: str, retries: int = MAX_EMBEDDING_RETRIE
     logger.error(f"Failed to get embedding after {retries} retries.")
     return None
 
+def embed_batch(client: OpenAI, texts: list[str], retries: int = MAX_EMBEDDING_RETRIES) -> list[list[float]] | None:
+    """Gets embeddings for a batch of texts using OpenAI API with retry logic."""
+    if not texts:
+        return [] # Return empty list if no texts provided
+        
+    attempt = 0
+    while attempt < retries:
+        try:
+            response = client.embeddings.create(
+                input=texts,
+                model=EMBEDDING_MODEL
+            )
+            # Ensure the response structure is as expected and contains data
+            if not response.data or len(response.data) != len(texts):
+                 logger.error(f"Mismatched response length from OpenAI embedding API. Expected {len(texts)}, got {len(response.data) if response.data else 0}.")
+                 # Decide how to handle: return None? Partial results? For now, treat as failure.
+                 raise APIError(f"Mismatched response length. Expected {len(texts)}, got {len(response.data) if response.data else 0}.", response=None, body=None)
+
+            # Extract embeddings in the correct order
+            batch_embeddings = [item.embedding for item in response.data]
+            return batch_embeddings
+        
+        except RateLimitError as e:
+            attempt += 1
+            logger.warning(f"Rate limit hit for embedding batch (size {len(texts)}), attempt {attempt}/{retries}. Retrying in {EMBEDDING_RETRY_DELAY}s... Error: {e}")
+            time.sleep(EMBEDDING_RETRY_DELAY)
+        except APIError as e:
+             # Handle context length errors for the whole batch if possible (though less likely)
+            if "context_length_exceeded" in str(e):
+                 logger.error(f"Context length exceeded for the batch (size {len(texts)}). Cannot process batch. Error: {e}")
+                 # This indicates one or more texts in the batch were too long. 
+                 # We can't easily identify which one failed here. Return None to signal batch failure.
+                 return None 
+            attempt += 1
+            logger.warning(f"API error during embedding batch (size {len(texts)}), attempt {attempt}/{retries}. Retrying in {EMBEDDING_RETRY_DELAY}s... Error: {e}")
+            time.sleep(EMBEDDING_RETRY_DELAY)
+        except Exception as e:
+            logger.error(f"Unexpected error getting embedding batch (size {len(texts)}): {e}", exc_info=True)
+            return None # Stop retrying on unexpected errors
+            
+    logger.error(f"Failed to get embedding batch after {retries} retries.")
+    return None
+
 def main():
-    parser = argparse.ArgumentParser(description="Build a FAISS index from exported Notion data.")
+    parser = argparse.ArgumentParser(description="Build or update a FAISS index from exported Notion data JSON files.")
     parser.add_argument(
         "-i", "--input",
-        default=DEFAULT_INPUT_JSON,
-        help=f"Path to the input JSON file containing processed entries (default: {DEFAULT_INPUT_JSON})"
+        nargs='+', # Accept one or more arguments
+        default=[DEFAULT_INPUT_GLOB],
+        help=f"Path(s) or glob pattern(s) for input JSON files (default: '{DEFAULT_INPUT_GLOB}')"
     )
     parser.add_argument(
         "--index-file",
         default=DEFAULT_INDEX_FILE,
-        help=f"Path to save the FAISS index file (default: {DEFAULT_INDEX_FILE})"
+        help=f"Path to load/save the FAISS index file (default: {DEFAULT_INDEX_FILE})"
     )
     parser.add_argument(
         "--mapping-file",
         default=DEFAULT_MAPPING_FILE,
-        help=f"Path to save the index-to-entry mapping JSON file (default: {DEFAULT_MAPPING_FILE})"
+        help=f"Path to load/save the index-to-entry mapping JSON file (default: {DEFAULT_MAPPING_FILE})"
+    )
+    parser.add_argument(
+        "--force-rebuild",
+        action="store_true",
+        help="Ignore existing index and mapping files and build from scratch."
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -80,35 +141,85 @@ def main():
     log_level = logging.DEBUG if args.verbose else logging.INFO
     config.setup_logging(level=log_level)
 
-    logger.info(f"Starting index build process...")
-    logger.info(f"Input JSON: {args.input}")
-    logger.info(f"Output Index: {args.index_file}")
-    logger.info(f"Output Mapping: {args.mapping_file}")
+    logger.info(f"Starting index build/update process...")
+    logger.info(f"Input pattern(s): {args.input}")
+    logger.info(f"Index file: {args.index_file}")
+    logger.info(f"Mapping file: {args.mapping_file}")
+    logger.info(f"Force rebuild: {args.force_rebuild}")
+    logger.info(f"Batch size: {BATCH_SIZE}")
 
-    # --- Load Input Data ---
-    logger.info(f"Loading entries from {args.input}...")
-    try:
-        with open(args.input, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-            entries = data.get('entries', [])
-        if not entries:
-            logger.error(f"No 'entries' found in {args.input}. Ensure the export was successful.")
-            sys.exit(1)
-        logger.info(f"Loaded {len(entries)} entries.")
-    except FileNotFoundError:
-        logger.error(f"Input file not found: {args.input}")
+    # --- Resolve Input Files ---
+    input_files = []
+    for pattern in args.input:
+        resolved_files = glob.glob(pattern)
+        if not resolved_files:
+            logger.warning(f"Input pattern '{pattern}' did not match any files.")
+        input_files.extend(resolved_files)
+    
+    if not input_files:
+        logger.error("No valid input JSON files found based on input patterns. Aborting.")
         sys.exit(1)
-    except json.JSONDecodeError as e:
-        logger.error(f"Error decoding JSON from {args.input}: {e}")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Unexpected error loading input file: {e}", exc_info=True)
-        sys.exit(1)
+        
+    # Sort files to process them in a consistent order (e.g., chronologically)
+    input_files.sort()
+    logger.info(f"Found {len(input_files)} input files to process: {input_files}")
+
+    # --- Load or Initialize Index and Mapping ---
+    index = None
+    mapping_data = []
+    processed_page_ids = set()
+    dimension = None # Will be determined later
+
+    if not args.force_rebuild and os.path.exists(args.index_file) and os.path.exists(args.mapping_file):
+        logger.info(f"Attempting to load existing index from {args.index_file} and mapping from {args.mapping_file}...")
+        try:
+            index = faiss.read_index(args.index_file)
+            dimension = index.d # Get dimension from loaded index
+            logger.info(f"Loaded existing FAISS index with {index.ntotal} vectors (Dimension: {dimension}).")
+            
+            with open(args.mapping_file, 'r', encoding='utf-8') as f:
+                mapping_data = json.load(f)
+            logger.info(f"Loaded existing mapping data with {len(mapping_data)} entries.")
+            
+            # Populate processed IDs set
+            for i, item in enumerate(mapping_data):
+                page_id = item.get('page_id')
+                if page_id:
+                    processed_page_ids.add(page_id)
+                else:
+                    logger.warning(f"Entry at index {i} in existing mapping file has no page_id. Skipping.")
+            logger.info(f"Loaded {len(processed_page_ids)} unique page IDs from existing mapping.")
+
+            # Sanity check: number of vectors in index should match mapping entries
+            if index.ntotal != len(mapping_data):
+                 logger.warning(f"Mismatch between index vectors ({index.ntotal}) and mapping entries ({len(mapping_data)}). Checkpoint might be corrupt. Consider --force-rebuild.")
+                 # Decide how to handle: exit, force rebuild, or proceed cautiously?
+                 # For now, proceed cautiously, but log a strong warning.
+
+        except FileNotFoundError:
+             logger.warning("Index/mapping file not found despite check (race condition?). Initializing new index.")
+             index = None
+             mapping_data = []
+             processed_page_ids = set()
+        except Exception as e:
+            logger.error(f"Error loading existing index/mapping: {e}. Consider --force-rebuild.", exc_info=True)
+            # Decide how to handle: exit or initialize new?
+            logger.warning("Proceeding by initializing a new index/mapping.")
+            index = None
+            mapping_data = []
+            processed_page_ids = set()
+    else:
+        if args.force_rebuild:
+            logger.info("Force rebuild requested. Initializing new index and mapping.")
+        else:
+            logger.info("No existing index/mapping found or files missing. Initializing new index and mapping.")
+        # index object will be created once the dimension is known
+        mapping_data = []
+        processed_page_ids = set()
 
     # --- Initialize OpenAI Client ---
     logger.info("Initializing OpenAI client...")
     try:
-        # Ensure API key is available (will raise ValueError from config if not)
         if not config.OPENAI_API_KEY:
              logger.error("OPENAI_API_KEY not found in environment or .env file.")
              sys.exit(1)
@@ -120,85 +231,226 @@ def main():
         logger.error(f"Failed to initialize OpenAI client: {e}", exc_info=True)
         sys.exit(1)
 
-    # --- Generate Embeddings and Mapping ---
-    logger.info("Generating embeddings and creating mapping...")
-    embeddings = []
-    mapping_data = []
-    skipped_entries = 0
-    dimension = None # Will be set by the first successful embedding
+    # --- Process Files, Generate Embeddings, Update Index --- 
+    logger.info("Processing input files incrementally...")
+    total_entries_processed_this_run = 0
+    total_entries_skipped_this_run = 0
+    total_embeddings_added_this_run = 0
+    files_processed_count = 0
 
-    for i, entry in enumerate(entries):
-        content_to_embed = entry.get('content', '')
-        if not content_to_embed:
-            logger.warning(f"Entry {i} (ID: {entry.get('page_id', 'N/A')}) has no content. Skipping embedding.")
-            skipped_entries += 1
+    for file_path in input_files:
+        files_processed_count += 1
+        logger.info(f"--- Processing file {files_processed_count}/{len(input_files)}: {file_path} ---")
+        entries_in_file = 0
+        embeddings_added_from_file = 0
+        skipped_in_file = 0
+        
+        # Batch processing buffers for the current file
+        batch_texts = []
+        batch_metadata = [] # Store corresponding entry dicts for mapping
+
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                current_entries = data.get('entries', [])
+            entries_in_file = len(current_entries)
+            if not current_entries:
+                logger.warning(f"No 'entries' found in {file_path}. Skipping file.")
+                continue 
+            logger.info(f"Loaded {entries_in_file} entries from {file_path}. Processing in batches of {BATCH_SIZE}...")
+        except FileNotFoundError:
+            logger.error(f"Input file disappeared: {file_path}. Skipping.")
+            continue
+        except json.JSONDecodeError as e:
+            logger.error(f"Error decoding JSON from {file_path}: {e}. Skipping file.")
+            continue
+        except Exception as e:
+            logger.error(f"Unexpected error loading {file_path}: {e}. Skipping file.", exc_info=True)
             continue
 
-        logger.debug(f"Generating embedding for entry {i} (ID: {entry.get('page_id', 'N/A')})...")
-        embedding = get_embedding(openai_client, content_to_embed)
-
-        if embedding:
-            if dimension is None:
-                dimension = len(embedding)
-                logger.info(f"Detected embedding dimension: {dimension}")
-            elif len(embedding) != dimension:
-                 logger.error(f"Inconsistent embedding dimension! Expected {dimension}, got {len(embedding)} for entry {i}. Aborting.")
-                 sys.exit(1)
+        # Function to process a completed batch
+        def process_embedding_batch(texts_to_embed, metadata_to_map):
+            nonlocal index, dimension, mapping_data, processed_page_ids, total_embeddings_added_this_run, embeddings_added_from_file, skipped_in_file, total_entries_skipped_this_run
             
-            embeddings.append(embedding)
-            # Store essential info for retrieval context
-            mapping_data.append({
-                "page_id": entry.get('page_id'),
-                "title": entry.get('title', '[No Title]'),
-                "entry_date": entry.get('entry_date'), # Or created_time if preferred
-                "content_preview": content_to_embed[:200] + ("..." if len(content_to_embed) > 200 else "") # Store preview for context
-            })
-        else:
-            logger.error(f"Failed to generate embedding for entry {i} (ID: {entry.get('page_id', 'N/A')}). Skipping.")
-            skipped_entries += 1
+            if not texts_to_embed:
+                return
 
-    if not embeddings:
-        logger.error("No embeddings were generated. Cannot build index.")
-        sys.exit(1)
+            logger.debug(f"Processing batch of {len(texts_to_embed)} entries...")
+            batch_embeddings = embed_batch(openai_client, texts_to_embed)
 
-    logger.info(f"Generated {len(embeddings)} embeddings. Skipped {skipped_entries} entries.")
+            if batch_embeddings is None: # Whole batch failed
+                logger.error(f"Failed to get embeddings for batch of size {len(texts_to_embed)}. Skipping these entries.")
+                skipped_in_file += len(texts_to_embed)
+                return
+                
+            if len(batch_embeddings) != len(texts_to_embed):
+                 logger.error(f"Mismatched results from embed_batch. Expected {len(texts_to_embed)}, got {len(batch_embeddings)}. Skipping batch.")
+                 skipped_in_file += len(texts_to_embed)
+                 return
 
-    # --- Build FAISS Index ---
-    logger.info(f"Building FAISS index (Dimension: {dimension})...")
-    try:
-        index = faiss.IndexFlatL2(dimension) # Using simple L2 distance
-        embeddings_np = np.array(embeddings).astype('float32') # FAISS requires float32 numpy array
-        index.add(embeddings_np)
-        logger.info(f"FAISS index built successfully. Total vectors: {index.ntotal}")
-    except Exception as e:
-        logger.error(f"Failed to build FAISS index: {e}", exc_info=True)
-        sys.exit(1)
+            # Process successful embeddings from the batch
+            vectors_to_add = []
+            mappings_to_add = []
+            ids_processed_in_batch = []
+            
+            for i, embedding in enumerate(batch_embeddings):
+                entry_data = metadata_to_map[i]
+                page_id = entry_data['page_id'] # Should exist based on earlier checks
 
-    # --- Save Index and Mapping ---
-    logger.info(f"Saving FAISS index to {args.index_file}...")
-    try:
-        faiss.write_index(index, args.index_file)
-        logger.info(f"Index saved successfully.")
-    except Exception as e:
-        logger.error(f"Failed to save FAISS index: {e}", exc_info=True)
-        sys.exit(1)
+                if embedding is None: # Should ideally not happen if batch succeeded, but check just in case
+                     logger.warning(f"Embed_batch succeeded but got None embedding for entry {i} (ID: {page_id}). Skipping.")
+                     skipped_in_file += 1
+                     continue
+                
+                # Initialize index if first embedding
+                if index is None:
+                    dimension = len(embedding)
+                    logger.info(f"First embedding successful. Detected dimension: {dimension}")
+                    try:
+                        index = faiss.IndexFlatL2(dimension)
+                        logger.info("FAISS index initialized.")
+                    except Exception as e:
+                        logger.critical(f"Failed to initialize FAISS index: {e}. Aborting.", exc_info=True)
+                        sys.exit(1)
+                
+                # Check dimension consistency
+                elif len(embedding) != dimension:
+                     logger.error(f"Inconsistent embedding dimension! Expected {dimension}, got {len(embedding)} for entry (ID: {page_id}). Skipping.")
+                     skipped_in_file += 1
+                     continue
+                
+                # If valid, prepare for adding
+                vectors_to_add.append(embedding)
+                mappings_to_add.append({
+                    "page_id": page_id,
+                    "title": entry_data.get('title', '[No Title]'),
+                    "entry_date": entry_data.get('entry_date'),
+                    "source_file": os.path.basename(file_path),
+                    "content_preview": entry_data.get('content', '')[:200] + ("..." if len(entry_data.get('content', '')) > 200 else "")
+                })
+                ids_processed_in_batch.append(page_id)
 
-    logger.info(f"Saving mapping data to {args.mapping_file}...")
-    try:
-        with open(args.mapping_file, 'w', encoding='utf-8') as f:
-            json.dump(mapping_data, f, indent=2)
-        logger.info(f"Mapping data saved successfully.")
-    except Exception as e:
-        logger.error(f"Failed to save mapping data: {e}", exc_info=True)
-        sys.exit(1)
+            # Add batch to index and mapping if any vectors are valid
+            if vectors_to_add:
+                try:
+                    embeddings_np = np.array(vectors_to_add).astype('float32')
+                    index.add(embeddings_np)
+                    mapping_data.extend(mappings_to_add)
+                    processed_page_ids.update(ids_processed_in_batch)
+                    
+                    count_added = len(vectors_to_add)
+                    embeddings_added_from_file += count_added
+                    total_embeddings_added_this_run += count_added
+                    logger.debug(f"Added batch of {count_added} embeddings. Index size: {index.ntotal}")
+                except Exception as e:
+                     logger.error(f"Error adding batch of embeddings to index: {e}. Corresponding mapping entries might not be added correctly.", exc_info=True)
+                     skipped_in_file += len(vectors_to_add) # Count these as skipped if add fails
+                     # Note: State might be inconsistent here (partially added mapping?) - checkpointing helps mitigate.
+        
+        # --- Loop through entries, build batches ---   
+        for i, entry in enumerate(current_entries):
+            total_entries_processed_this_run += 1
+            page_id = entry.get('page_id')
+            entry_title = entry.get('title', '[No Title]')
 
-    logger.info("Index build process completed.")
+            if not page_id:
+                logger.warning(f"Entry {i+1}/{entries_in_file} in {file_path} (Title: '{entry_title}') missing page_id. Skipping.")
+                skipped_in_file += 1
+                continue
+
+            if page_id in processed_page_ids:
+                logger.debug(f"Page ID {page_id} (Title: '{entry_title}') already processed. Skipping duplicate.")
+                skipped_in_file += 1
+                continue
+
+            content_to_embed = entry.get('content', '')
+            if not content_to_embed or not content_to_embed.strip():
+                logger.warning(f"Entry {i+1}/{entries_in_file} (ID: {page_id}, Title: '{entry_title}') has empty/blank content. Skipping embedding.")
+                skipped_in_file += 1
+                continue
+            
+            # Add to current batch
+            batch_texts.append(content_to_embed)
+            batch_metadata.append(entry) # Keep the original entry dict for mapping creation later
+            
+            # If batch is full, process it
+            if len(batch_texts) >= BATCH_SIZE:
+                process_embedding_batch(batch_texts, batch_metadata)
+                # Clear the batch buffers
+                batch_texts = []
+                batch_metadata = []
+        
+        # Process any remaining items in the last batch for this file
+        if batch_texts:
+            logger.info(f"Processing final batch of {len(batch_texts)} entries for {file_path}...")
+            process_embedding_batch(batch_texts, batch_metadata)
+            batch_texts = [] # Clear just in case
+            batch_metadata = []
+        
+        # Update total skips and log file summary
+        total_entries_skipped_this_run += skipped_in_file
+        logger.info(f"Finished processing {file_path}. Added {embeddings_added_from_file} new embeddings. Skipped {skipped_in_file} entries (duplicates/errors/empty). Index size: {index.ntotal if index else 0}.")
+
+        # --- Save Checkpoint After Each File ---
+        if index is not None and embeddings_added_from_file > 0: # Only save if something was potentially added from this file
+            logger.info(f"Saving checkpoint after processing {file_path}... Index size: {index.ntotal}, Mapping size: {len(mapping_data)}")
+            checkpoint_saved = False
+            try:
+                faiss.write_index(index, args.index_file)
+                logger.info(f"Checkpoint index saved successfully to {args.index_file}.")
+                checkpoint_saved = True 
+            except Exception as e:
+                logger.error(f"Failed to save checkpoint FAISS index after {file_path}: {e}", exc_info=True)
+                logger.warning("Continuing to next file despite index checkpoint save failure.")
+
+            if checkpoint_saved: 
+                try:
+                    with open(args.mapping_file, 'w', encoding='utf-8') as f:
+                        json.dump(mapping_data, f, indent=2)
+                    logger.info(f"Checkpoint mapping data saved successfully to {args.mapping_file}.")
+                except Exception as e:
+                    logger.error(f"Failed to save checkpoint mapping data after {file_path}: {e}", exc_info=True)
+                    logger.warning("Continuing despite mapping checkpoint save failure. Index/mapping may be out of sync!")
+        elif embeddings_added_from_file == 0:
+             logger.info(f"No new embeddings added from {file_path}. Skipping checkpoint save.")
+
+    # --- Final Save Check (Consolidated) ---
+    logger.info("Performing final save check...")
+    if index is not None: 
+        logger.info(f"Finalizing save of index ({index.ntotal} vectors) and mapping ({len(mapping_data)} entries)...")
+        final_save_ok = True
+        try:
+            faiss.write_index(index, args.index_file)
+            logger.info(f"Final index saved successfully to {args.index_file}.")
+        except Exception as e:
+            logger.error(f"Failed to save final FAISS index: {e}", exc_info=True)
+            final_save_ok = False
+        
+        try:
+            with open(args.mapping_file, 'w', encoding='utf-8') as f:
+                json.dump(mapping_data, f, indent=2)
+            logger.info(f"Final mapping data saved successfully to {args.mapping_file}.")
+        except Exception as e:
+            logger.error(f"Failed to save final mapping data: {e}", exc_info=True)
+            final_save_ok = False
+            
+        if not final_save_ok:
+             logger.error("One or both final save operations failed. Index and mapping may be corrupt or out of sync!")
+    else:
+         logger.warning("No embeddings generated or index not initialized. Nothing to save.")
+
+    # --- Summary Logging ---
+    logger.info("--- Index build/update process finished ---")
+    logger.info(f"Total entries processed across files: {total_entries_processed_this_run}")
+    logger.info(f"Total entries skipped (duplicates/errors/empty): {total_entries_skipped_this_run}")
+    logger.info(f"Total new embeddings added to index: {total_embeddings_added_this_run}")
+    logger.info(f"Final index size: {index.ntotal if index else 0} vectors")
+    logger.info(f"Final mapping size: {len(mapping_data)} entries")
 
 if __name__ == "__main__":
-    # Check for OPENAI_API_KEY early in config import before logging setup
-    # This happens implicitly when config is imported, it raises ValueError if missing.
+    # Check for OPENAI_API_KEY early
     try:
-        _ = config.OPENAI_API_KEY
+        _ = config.OPENAI_API_KEY 
     except ValueError as e:
          print(f"Error: {e}", file=sys.stderr)
          sys.exit(1)
