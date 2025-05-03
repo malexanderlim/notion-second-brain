@@ -105,10 +105,40 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
   - [ ] Implement the chosen synchronization solution (likely involving scheduled runs of `cli.py --export-month` and `build_index.py`).
 
 - [ ] **Web Interface (Hyper-MVP):**
-  - [ ] Design basic UI (query input, answer display, perhaps retrieved sources).
-  - [ ] Implement backend API endpoint (e.g., Flask/FastAPI) to wrap `cli.py --query` logic.
-  - [ ] Ensure proper handling of dependencies and environment for the web server.
-  - [ ] Connect UI to backend, displaying formatted answer and links.
+  - [ ] **Backend Setup:**
+    - [x] Choose & setup backend framework (Flask/FastAPI) in `backend/` directory.
+    - [x] Define `/api/query` POST endpoint structure.
+    - [x] Refactor RAG query logic from `cli.py` into a reusable function in `backend/rag_query.py` (or similar).
+    - [x] Implement index/mapping loading in the backend function.
+    - [x] Implement query embedding, FAISS search, context retrieval logic in the backend function.
+    - [x] Implement LLM call and response parsing in the backend function.
+    - [x] Implement extraction of source document titles and URLs.
+    - [x] Connect the `/api/query` endpoint to the refactored RAG logic.
+    - [x] Add basic error handling (try-except blocks) to the endpoint.
+    - [x] Create `backend/requirements.txt` (including Flask/FastAPI, openai, faiss-cpu, etc.).
+    - [x] Add CORS middleware to the backend application.
+    - [x] **Fix:** Ensure `sources` list in `rag_query.py` is correctly populated with `{'title': title, 'url': constructed_url}`.
+  - [ ] **Frontend Setup:**
+    - [x] Create `frontend/` directory.
+    - [x] Initialize React + Vite + TS project (`npm create vite@latest frontend -- --template react-ts`).
+    - [x] Install and configure Tailwind CSS.
+    - [x] Initialize `shadcn/ui` (`npx shadcn@latest init`).
+    - [x] Install necessary `shadcn/ui` components (e.g., `button`, `input`, `card`, `skeleton`).
+    - [x] Install `axios`.
+  - [ ] **Frontend UI Implementation:**
+    - [x] Create main `App.tsx` component structure.
+    - [x] Add `Input` for query and `Button` for submission.
+    - [x] Add `Card` for displaying the answer.
+    - [x] Implement `useState` hooks for query, loading, answer, sources, error.
+    - [x] Implement the `handleSubmit` function to call the backend API.
+    - [x] Implement loading state display (e.g., show `Skeleton`).
+    - [x] Render the answer text within the `Card`.
+    - [x] Render source links (title + URL) below the answer.
+    - [x] Display a generic error message if the API call fails.
+  - [ ] **Integration & Testing:**
+    - [x] Run backend and frontend dev servers concurrently.
+    - [x] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed. (**Note:** Basic functionality verified, but source links are not rendering correctly in the UI despite backend fixes).
+    - [ ] Test error handling path (e.g., simulate backend failure).
 
 - [ ] **Further RAG Enhancements:**
   - [ ] **Model Exploration:**
@@ -175,10 +205,27 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 - `build_index.py` - (New) Script to create FAISS index ⏳ (Needs creation)
 - `index.faiss` - (Generated) FAISS index file ⏳
 - `index_mapping.json` - (Generated) Index mapping file ⏳
+- `metadata_cache.json` - (Generated) Cache for distinct metadata values ✅
+- `TECHNICAL_LEARNINGS.md` - Summary of RAG development insights ✅
+- `design/WEB_UI_TDD.md` - Technical design for Web UI MVP ✅
 
 (Future files)
 - `tests/` - Directory for test code
 - `docs/` - Directory for documentation
+- `backend/` - Directory for backend API server code ✅
+  - `backend/main.py` - FastAPI/Flask application entry point ✅
+  - `backend/rag_query.py` - Refactored RAG query logic ✅
+  - `backend/requirements.txt` - Backend Python dependencies ✅
+- `frontend/` - Directory for React frontend code ✅
+  - `frontend/src/App.tsx` - Main React application component ✅
+  - `frontend/src/components/ui/` - shadcn/ui components ✅
+  - `frontend/package.json` - Frontend Node.js dependencies ✅
+  - `frontend/vite.config.ts` - Vite configuration ✅
+  - `frontend/tailwind.config.js` - Tailwind CSS configuration ✅
+  - `frontend/tsconfig.json` - TypeScript configuration ✅
+  - `frontend/tsconfig.app.json` - TypeScript app configuration ✅
+  - `frontend/src/lib/utils.ts` - shadcn utility functions ✅
+  - `frontend/components.json` - shadcn configuration file ✅
 
 - [x] **Implement Initial Indexing (Batch Rollout):**
   - [x] Modify `cli.py` to support `--month YYYY-MM` export argument & filtering logic.
