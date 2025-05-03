@@ -135,6 +135,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Render the answer text within the `Card`.
     - [x] Render source links (title + URL) below the answer.
     - [x] Display a generic error message if the API call fails.
+    - [ ] **Persist Query History:** Modify state to store a list of query/response/error entries instead of just the latest one. Update rendering logic to display the history.
   - [ ] **Integration & Testing:**
     - [x] Run backend and frontend dev servers concurrently.
     - [x] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed. (Verified after resolving backend/CLI discrepancies).

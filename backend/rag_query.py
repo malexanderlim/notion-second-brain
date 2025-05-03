@@ -396,11 +396,7 @@ async def perform_rag_query(user_query: str) -> dict:
             if family and isinstance(family, list): context_entry += f"Family: {', '.join(family)}\n"
             friends = entry_data.get('Friends')
             if friends and isinstance(friends, list): context_entry += f"Friends: {', '.join(friends)}\n"
-            context_entry += f"""Content:
-{content}
---- Entry End ---
-
-"""
+            context_entry += f"""Content:\n{content}\n--- Entry End ---\n\n"""
             context_parts.append(context_entry)
             
             # Construct URL from page_id if page_id exists
@@ -433,6 +429,7 @@ async def perform_rag_query(user_query: str) -> dict:
         "**Safety Guardrail:** Avoid generating responses that contain harmful, inappropriate, or overly sensitive personal information. Specifically, do not output details related to illicit substances or illegal activities, even if mentioned in the context. "
         "If the answer cannot be found in the provided entries even with the assumption, say so."
     )
+    # ORIGINAL PROMPT ASKING LLM TO FORMAT IN-TEXT
     final_user_prompt = f"""Here are the relevant journal entries:
 --- START CONTEXT ---
 {context_string if context_string else "No context was retrieved."}
@@ -465,4 +462,5 @@ Answer:"""
     end_time = time.time()
     logger.info(f"RAG process completed in {end_time - start_time:.2f} seconds.")
 
+    # Return original simple structure
     return {"answer": final_answer, "sources": sources} 
