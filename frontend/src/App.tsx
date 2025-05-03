@@ -59,7 +59,7 @@ function App() {
   };
 
   return (
-    <div className="container mx-auto p-4 max-w-3xl min-h-screen flex flex-col items-center pt-10">
+    <div className="container mx-auto p-4 max-w-2xl min-h-screen flex flex-col items-center pt-10">
       <h1 className="text-3xl font-bold mb-6">Query Your Second Brain</h1>
       
       <form onSubmit={handleSubmit} className="w-full flex gap-2 mb-8">

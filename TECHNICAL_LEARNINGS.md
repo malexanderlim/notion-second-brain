@@ -48,4 +48,26 @@ This document captures key technical insights and evolution during the developme
 
 *   **Embeddings:** Batching embedding requests is generally faster and potentially more cost-effective than individual calls.
 *   **Query Analysis:** Using a smaller, cheaper model (`gpt-4o-mini`) for the structured query analysis is efficient.
-*   **Final Answer:** Using a more powerful (and expensive) model (`gpt-4o`) for the final synthesis step provides higher accuracy, but cost scales with the amount of context (`TOP_K` * content length) provided. There's a trade-off between context size, final model cost, and answer quality. 
+*   **Final Answer:** Using a more powerful (and expensive) model (`gpt-4o`) for the final synthesis step provides higher accuracy, but cost scales with the amount of context (`TOP_K` * content length) provided. There's a trade-off between context size, final model cost, and answer quality.
+
+## Debugging CLI vs. Backend RAG Discrepancy
+
+During the development of the web UI, a significant discrepancy was observed between the RAG results returned by the command-line interface (`cli.py`) and the FastAPI backend (`backend/rag_query.py`) for the same query.
+
+The CLI consistently provided the correct answer and sources, while the backend initially failed to find the answer or returned incorrect/incomplete source information. The debugging process involved several steps:
+
+1.  **Initial Check & Key Mismatch:** Compared backend logs (`INFO - Successfully processed query. Returning answer and X sources.`) with the UI output. Initial runs showed the backend returning 0 sources or sources titled "Untitled Entry". This pointed towards an issue in how the backend retrieved source metadata (`title`, `page_id`, `entry_date`) from the `index_mapping.json` data. Analysis of `build_index.py` confirmed the correct keys (`page_id`, `title`, `entry_date`), and `backend/rag_query.py` was updated accordingly in both the `load_rag_data` pre-parsing step and the context retrieval step.
+
+2.  **Embedding Model Mismatch:** Even after fixing keys, the backend returned the *wrong* set of sources compared to the CLI. Investigation revealed that the index was built using `text-embedding-ada-002` (`build_index.py`), but the backend was generating query embeddings using `text-embedding-3-small` (`backend/rag_query.py`). This mismatch caused the similarity search to retrieve irrelevant documents. The backend's `OPENAI_EMBEDDING_MODEL` was changed to `text-embedding-ada-002` to align with the index.
+
+3.  **CORS Preflight Issue:** After aligning embeddings, the frontend started receiving `400 Bad Request` errors on `OPTIONS` requests to the backend API. This indicated a CORS preflight failure. The `CORSMiddleware` configuration in `backend/main.py` was missing `"OPTIONS"` in its `allow_methods` list. Adding it resolved the browser's preflight check.
+
+4.  **Prompt Discrepancy:** With the technical issues resolved, the backend now returned the correct *answer* but the formatting differed from the CLI output (e.g., lacking the inline Notion link). Comparing the final answer generation prompts revealed that the CLI's prompt included specific Markdown formatting instructions (`Journal Entry: [Title](URL)`) which were missing from the backend's prompt. The backend's `final_system_prompt` and `final_user_prompt` were updated to match the CLI's for consistent output formatting.
+
+**Key Takeaways:**
+
+*   **Consistency is Crucial:** Ensure absolute consistency between indexing and querying processes, especially regarding embedding models and data structure keys (mapping file).
+*   **Logging Intermediate Steps:** Logging the retrieved context (titles, IDs) *before* sending it to the final LLM was vital for pinpointing the embedding mismatch.
+*   **Check CORS Thoroughly:** Remember that browser preflight `OPTIONS` requests require explicit allowance in backend CORS configurations.
+*   **Prompt Engineering Matters:** Subtle differences in prompts, especially formatting instructions, can significantly impact the LLM's output structure.
+*   **Separate Concerns:** While refactoring from CLI to backend, meticulously verify that all relevant logic (including constants and prompt details) is transferred correctly. 

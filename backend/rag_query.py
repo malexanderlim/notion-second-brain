@@ -14,7 +14,7 @@ INDEX_PATH = "index.faiss"
 MAPPING_PATH = "index_mapping.json"
 METADATA_CACHE_PATH = "metadata_cache.json"
 DATABASE_SCHEMA_PATH = "schema.json" # Corrected schema path
-OPENAI_EMBEDDING_MODEL = "text-embedding-3-small"
+OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
 FINAL_ANSWER_MODEL = "gpt-4o"
 QUERY_ANALYSIS_MODEL = "gpt-4o"
 TOP_K = 15
@@ -68,13 +68,13 @@ def load_rag_data():
             entry['faiss_index'] = i 
             
             # Convert date string if present
-            if 'Entry Date' in entry and isinstance(entry['Entry Date'], str):
+            if 'entry_date' in entry and isinstance(entry['entry_date'], str):
                 try:
-                    entry['Entry Date'] = date.fromisoformat(entry['Entry Date'])
+                    entry['entry_date'] = date.fromisoformat(entry['entry_date'])
                 except ValueError:
-                    page_id_for_log = entry.get('id', f'index {i}')
-                    logger.warning(f"Could not parse date string: {entry['Entry Date']} for entry {page_id_for_log}")
-                    entry['Entry Date'] = None
+                    page_id_for_log = entry.get('page_id', f'index {i}')
+                    logger.warning(f"Could not parse date string: {entry['entry_date']} for entry {page_id_for_log}")
+                    entry['entry_date'] = None
             
             index_to_entry[i] = entry # Map list index i to the entry dict
 
@@ -256,7 +256,7 @@ async def perform_rag_query(user_query: str) -> dict:
                 for idx in candidate_indices:
                     # Use index_to_entry to get data for the current FAISS index
                     entry = index_to_entry.get(idx) 
-                    entry_date = entry.get('Entry Date') if entry else None
+                    entry_date = entry.get('entry_date') if entry else None
                     if entry_date and isinstance(entry_date, date):
                         if start_date_filter <= entry_date <= end_date_filter:
                             new_candidate_indices.append(idx)
@@ -352,28 +352,50 @@ async def perform_rag_query(user_query: str) -> dict:
     logger.info("Retrieving content for top results...")
     for idx in retrieved_indices:
         if idx in retrieved_faiss_indices: continue # Skip duplicates from search if any
-        entry_data = index_to_entry.get(idx) # Get data using FAISS index
+        entry_data = index_to_entry.get(idx)
         if entry_data:
             retrieved_faiss_indices.add(idx)
             content = entry_data.get('content', '')
-            # Use page_id from entry if available, otherwise use index for title
-            page_id_for_log = entry_data.get('id', f'index {idx}') 
-            title = entry_data.get('Name', f"Untitled Entry ({page_id_for_log})") 
-            url = entry_data.get('url', '')
-            entry_date_obj = entry_data.get('Entry Date')
-            entry_date_str = entry_date_obj.strftime('%Y-%m-%d') if isinstance(entry_date_obj, date) else None
+            page_id = entry_data.get('page_id') 
+            page_id_for_log = page_id if page_id else f'index {idx}'
+            title = entry_data.get('title', f"Untitled Entry ({page_id_for_log})") 
+            
+            # >>> ADD LOGGING SIMILAR TO CLI <<<
+            entry_date_value = entry_data.get('entry_date')
+            entry_date_str_for_log = None
+            if isinstance(entry_date_value, date):
+                 entry_date_str_for_log = entry_date_value.strftime('%Y-%m-%d')
+            elif isinstance(entry_date_value, str):
+                 entry_date_str_for_log = entry_date_value
+            # Find the distance if available (requires searching with distances)
+            # Note: The current `index.search` call doesn't seem to retain distances alongside indices easily here.
+            # We'll log without distance for now, which is the crucial part.
+            logger.info(f"  - Retrieved Context: ID: {page_id_for_log}, Title: {title}, Date: {entry_date_str_for_log}")
+            # >>> END LOGGING <<<
+            
+            entry_date_value = entry_data.get('entry_date') 
+            entry_date_obj = None
+            entry_date_str = None
+            if isinstance(entry_date_value, date):
+                entry_date_obj = entry_date_value
+                entry_date_str = entry_date_obj.strftime('%Y-%m-%d')
+            elif isinstance(entry_date_value, str):
+                entry_date_str = entry_date_value
+                try:
+                    entry_date_obj = date.fromisoformat(entry_date_value) 
+                except ValueError:
+                    logger.warning(f"Context: Could not parse date string: {entry_date_value} for entry {page_id_for_log}")
 
             # Construct context string
-            context_entry = f"""--- Entry Start ---
-Title: {title}
-"""
+            context_entry = f"""--- Entry Start ---\nTitle: {title}\n"""
+            if page_id: context_entry += f"Page ID: {page_id}\n" 
             if entry_date_str: context_entry += f"Date: {entry_date_str}\n"
-            tags = entry_data.get('Tags')
-            if tags: context_entry += f"Tags: {', '.join(tags)}\n"
+            tags = entry_data.get('Tags') 
+            if tags and isinstance(tags, list): context_entry += f"Tags: {', '.join(tags)}\n"
             family = entry_data.get('Family')
-            if family: context_entry += f"Family: {', '.join(family)}\n"
+            if family and isinstance(family, list): context_entry += f"Family: {', '.join(family)}\n"
             friends = entry_data.get('Friends')
-            if friends: context_entry += f"Friends: {', '.join(friends)}\n"
+            if friends and isinstance(friends, list): context_entry += f"Friends: {', '.join(friends)}\n"
             context_entry += f"""Content:
 {content}
 --- Entry End ---
@@ -381,11 +403,19 @@ Title: {title}
 """
             context_parts.append(context_entry)
             
-            # Add source only if URL exists
-            if url:
-                 sources.append({"title": title, "url": url})
-                 # Note: sources might contain duplicates if multiple chunks from the same page are retrieved
-                 # This simple approach lists all retrieved sources.
+            # Construct URL from page_id if page_id exists
+            constructed_url = None
+            if page_id:
+                page_id_no_hyphens = page_id.replace("-", "")
+                constructed_url = f"https://www.notion.so/{page_id_no_hyphens}"
+            
+            # Append source info if URL exists
+            if constructed_url:
+                sources.append({"title": title, "url": constructed_url})
+            else:
+                # Optionally log if a source is skipped due to missing page_id/url
+                logger.debug(f"Skipping source for entry '{title}' due to missing page_id/URL.")
+
         else:
             logger.warning(f"FAISS index {idx} found in search results but not in index_to_entry mapping.")
 
@@ -394,25 +424,31 @@ Title: {title}
 
     # 6. Generate Final Answer using LLM
     logger.info("Generating final answer using LLM...")
-    final_system_prompt = (
-        "You are a helpful assistant answering questions based on provided text snippets from personal journal entries. "
-        "Use ONLY the provided context snippets to answer the user's query. Do not make assumptions or use external knowledge. "
-        "Synthesize the information from the snippets to provide a concise and accurate answer. "
-        "If the context contains relevant dates, names, or tags, mention them in your answer. "
-        "If the context explicitly mentions someone being 'tagged', treat it as confirmation that the event or mention occurred (e.g., 'tagged = seen'). "
-        "If the provided context does not contain the answer, state that you couldn't find the information in the provided entries. "
-        "Format dates clearly (e.g., YYYY-MM-DD). "
-        "Be helpful and conversational."
+    # Align System and User prompts with CLI for formatting
+    final_system_prompt = ( 
+        "You are a helpful assistant answering questions based ONLY on the provided journal entries. "
+        "Analyze the metadata (Title, Date, Tags, Family, Friends, etc.) and the Content of each entry carefully. "
+        "**Assumption:** Assume that if a person's name appears in the 'Family' or 'Friends' metadata for an entry, the author saw or was with that person on that entry's date, even if the content doesn't explicitly state it. Use this assumption when answering questions about seeing people or frequency of contact. "
+        "Do not make assumptions or use external knowledge beyond this specific instruction. "
+        "**Safety Guardrail:** Avoid generating responses that contain harmful, inappropriate, or overly sensitive personal information. Specifically, do not output details related to illicit substances or illegal activities, even if mentioned in the context. "
+        "If the answer cannot be found in the provided entries even with the assumption, say so."
     )
-    final_user_prompt = f"""Context from relevant journal entries:
---- CONTEXT START ---
+    final_user_prompt = f"""Here are the relevant journal entries:
+--- START CONTEXT ---
 {context_string if context_string else "No context was retrieved."}
---- CONTEXT END ---
+--- END CONTEXT ---
 
-User Query: "{user_query}"
+Based *only* on the context provided above, answer the following question comprehensively.
 
-Based *only* on the provided context, answer the user's query:
-"""
+**Instructions for Formatting:**
+- If the answer includes specific dates or references entries, please include:
+  - The relevant date (e.g., `Date: YYYY-MM-DD`).
+  - A markdown link to the most relevant original Notion journal entry formatted as `Journal Entry: [Title of Entry](Notion Link)`.
+  - Construct the Notion Link using the 'Page ID:' metadata like this: `https://www.notion.so/<page_id_without_hyphens>` (e.g., if Page ID is 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', the link is `https://www.notion.so/a1b2c3d4e5f67890abcdef1234567890`). Use the 'Title:' metadata for the link text.
+  - Place these details clearly within or directly following the main answer text.
+
+Question: {user_query}
+Answer:"""
     logger.debug(f"Final Answer System Prompt: {final_system_prompt}")
     logger.debug(f"Final Answer User Prompt Start:\nContext Length: {len(context_string)}\nQuery: {user_query}")
     final_answer = "Error: Default answer generation failure."

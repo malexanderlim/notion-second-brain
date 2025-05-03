@@ -117,6 +117,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Add basic error handling (try-except blocks) to the endpoint.
     - [x] Create `backend/requirements.txt` (including Flask/FastAPI, openai, faiss-cpu, etc.).
     - [x] Add CORS middleware to the backend application.
+    - [x] **Fix:** Ensure `sources` list in `rag_query.py` is correctly populated with `{'title': title, 'url': constructed_url}`.
   - [ ] **Frontend Setup:**
     - [x] Create `frontend/` directory.
     - [x] Initialize React + Vite + TS project (`npm create vite@latest frontend -- --template react-ts`).
@@ -135,8 +136,8 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Render source links (title + URL) below the answer.
     - [x] Display a generic error message if the API call fails.
   - [ ] **Integration & Testing:**
-    - [ ] Run backend and frontend dev servers concurrently.
-    - [ ] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed.
+    - [x] Run backend and frontend dev servers concurrently.
+    - [x] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed. (**Note:** Basic functionality verified, but source links are not rendering correctly in the UI despite backend fixes).
     - [ ] Test error handling path (e.g., simulate backend failure).
 
 - [ ] **Further RAG Enhancements:**
