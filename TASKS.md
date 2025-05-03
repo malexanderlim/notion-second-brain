@@ -104,7 +104,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - Consider how to handle page deletions (remove from index?).
   - [ ] Implement the chosen synchronization solution (likely involving scheduled runs of `cli.py --export-month` and `build_index.py`).
 
-- [ ] **Web Interface (Hyper-MVP):**
+- [x] **Web Interface (Hyper-MVP):**
   - [ ] **Backend Setup:**
     - [x] Choose & setup backend framework (Flask/FastAPI) in `backend/` directory.
     - [x] Define `/api/query` POST endpoint structure.
@@ -137,7 +137,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Display a generic error message if the API call fails.
   - [ ] **Integration & Testing:**
     - [x] Run backend and frontend dev servers concurrently.
-    - [x] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed. (**Note:** Basic functionality verified, but source links are not rendering correctly in the UI despite backend fixes).
+    - [x] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed. (Verified after resolving backend/CLI discrepancies).
     - [ ] Test error handling path (e.g., simulate backend failure).
 
 - [ ] **Further RAG Enhancements:**
