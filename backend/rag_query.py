@@ -95,17 +95,22 @@ def load_rag_data():
         logger.info(f"Loading distinct metadata values from {METADATA_CACHE_PATH}...")
         if os.path.exists(METADATA_CACHE_PATH):
             with open(METADATA_CACHE_PATH, 'r') as f:
-                distinct_metadata_values = json.load(f)
-                for key in distinct_metadata_values:
-                    if isinstance(distinct_metadata_values[key], list):
-                         distinct_metadata_values[key] = set(distinct_metadata_values[key])
-            logger.info("Distinct metadata values cache loaded.")
+                cache_content = json.load(f) # Load the entire cache content
+                if "distinct_values" in cache_content and isinstance(cache_content["distinct_values"], dict):
+                    distinct_metadata_values = cache_content["distinct_values"] # Assign the nested dictionary
+                    for key in distinct_metadata_values: # Now iterate over "Family", "Friends", "Tags"
+                        if isinstance(distinct_metadata_values[key], list):
+                             distinct_metadata_values[key] = set(distinct_metadata_values[key]) # Convert lists to sets
+                    logger.info("Distinct metadata values (from 'distinct_values' key) processed and loaded.")
+                else:
+                    logger.warning(f"'{METADATA_CACHE_PATH}' does not contain a 'distinct_values' dictionary. Proceeding without specific distinct values.")
+                    distinct_metadata_values = {} 
         else:
             logger.warning(f"Metadata cache file not found at {METADATA_CACHE_PATH}. Proceeding without it.")
-            distinct_metadata_values = None
+            distinct_metadata_values = {} 
     except Exception as e:
         logger.error(f"Error loading metadata cache from {METADATA_CACHE_PATH}: {e}. Proceeding without cache.", exc_info=True)
-        distinct_metadata_values = None
+        distinct_metadata_values = {} 
 
     try:
         logger.info(f"Loading database schema from {DATABASE_SCHEMA_PATH}...")
@@ -168,9 +173,7 @@ async def analyze_query_for_filters(query: str) -> dict | None:
     if not schema_properties: logger.warning("Database schema not loaded. Query analysis will proceed without schema context."); current_schema = {}
     else: current_schema = schema_properties
     
-    # --- MODIFICATION START: Add current date to prompt ---
     current_date_str = date.today().isoformat()
-    # --- MODIFICATION END ---
 
     field_descriptions = []
     current_distinct_values = distinct_metadata_values or {}
@@ -178,6 +181,8 @@ async def analyze_query_for_filters(query: str) -> dict | None:
         field_type = details.get('type', 'unknown'); desc = f"- {name} (type: {field_type})"
         if name in current_distinct_values:
             known_values = current_distinct_values[name]
+            if name == "Tags":
+                logger.info(f"[Query Analysis] Distinct values for 'Tags' field being used: {known_values}")
             if known_values and isinstance(known_values, (list, set)):
                 max_values_to_show = 50; values_list = list(known_values); values_str = ", ".join(values_list[:max_values_to_show])
                 if len(values_list) > max_values_to_show: values_str += f", ... ({len(values_list) - max_values_to_show} more)"
@@ -185,21 +190,31 @@ async def analyze_query_for_filters(query: str) -> dict | None:
             elif known_values: logger.warning(f"Expected list/set for distinct values of '{name}', got {type(known_values)}")
         field_descriptions.append(desc)
     schema_prompt_part = "\n".join(field_descriptions) if field_descriptions else "No schema information available."
+    
     system_prompt = (
-        "You are a query analysis assistant. Your task is to analyze the user query and the available Notion database fields "
-        "(including known values for some fields, if provided) to extract structured filters. Identify potential entities like names, tags, dates, or date ranges mentioned in the query "
-        "and map them to the most relevant field based on the provided schema AND the known values (if available). Format the output as a JSON object. "
-        # --- MODIFICATION START: Add current date instruction ---
+        "You are a query analysis assistant. Your primary task is to extract structured filters from the user's query based on the provided Notion database schema and known values. "
+        "Format the output as a JSON object. "
         f"Today's date is {current_date_str}. Use this as the reference for any relative date calculations (e.g., 'last month', 'past 6 months'). "
-        # --- MODIFICATION END ---
-        "Recognize date ranges (like 'last year', '2024', 'next month', 'June 2023'). For date ranges, output a 'date_range' key "
-        "with 'start' and 'end' sub-keys in 'YYYY-MM-DD' format. For specific field value filters, output a 'filters' key containing "
+        
+        "**Date Range Extraction (Highest Priority):** "
+        "First, always check for date ranges. Phrases like 'last year', 'in 2024', 'next month', 'June 2023', or specific start/end dates should be converted to a 'date_range' key "
+        "with 'start' and 'end' sub-keys in 'YYYY-MM-DD' format. For a single year like 'in 2024', this means start: '2024-01-01' and end: '2024-12-31'. "
+        "If a date range is identified, include it in the output. "
+
+        "**Field Value Filters (Names, Tags, etc.):** "
+        "Next, identify other potential entities like names or tags. For these, output a 'filters' key containing "
         "a list of objects, where each object has 'field' (the Notion property name) and 'contains' (the value extracted from the query). "
-        "**Important:** Names of people are typically found in the 'Family' (relation) or 'Friends' (relation) fields. Use the 'Known values' list provided for these fields to help map names accurately (if available). Map person names to THESE fields unless the query specifically asks about the entry's title (the 'Name' field). "
-        "If a name could belong to either 'Family' or 'Friends' based on known values or context, include filters for BOTH fields (if Family/Friends fields exist in schema). "
-        "Match keywords mentioned in the query to the 'Known values' for the 'Tags' field where appropriate (if Tags field exists in schema). "
-        "If no specific filters are identified, return an empty JSON object {}."
+        
+        "**Specific Field Guidance:** "
+        "1. **Names:** Names of people are typically found in the 'Family' or 'Friends' fields. Use the 'Known values' for these fields to map names accurately. If a name could belong to either, include filters for BOTH. Do not map names to the entry's title (the 'Name' field) unless the query specifically asks about titles. "
+        "2. **Tags:** Match keywords to 'Known values' for the 'Tags' field. Additionally: "
+        "   - If the query mentions preparing food (e.g., 'cooked', 'made food') AND a 'Cooking' tag exists in 'Known values' for 'Tags', create a filter: `{'field': 'Tags', 'contains': 'Cooking'}`. "
+        "   - If the query mentions dining out (e.g., 'ate at restaurant') AND a 'Restaurant' tag exists in 'Known values' for 'Tags', create a filter: `{'field': 'Tags', 'contains': 'Restaurant'}`. "
+        "   Only use these semantic tag mappings if the target tag (e.g., 'Cooking', 'Restaurant') is explicitly listed in the 'Known values'. Do not invent tags. "
+        
+        "If no specific filters (date range or field filters) are identified, return an empty JSON object {}. Prioritize extracting a date range if present in the query."
     )
+
     user_prompt = f"""Available Notion Fields (with known values for some):
 --- SCHEMA & VALUES START ---
 {schema_prompt_part}
@@ -231,305 +246,353 @@ Analyze the query based ONLY on the schema (if provided), known values (if provi
 
 async def perform_rag_query(user_query: str) -> dict:
     """Performs the full RAG process assuming mapping data is a list."""
-    # Use the globally loaded and processed data
-    if not all([openai_client, index, index_to_entry, mapping_data_list]): # Added mapping_data_list for safety
+    if not all([openai_client, index, index_to_entry, mapping_data_list]):
          logger.error("RAG system core components (client, index, index->entry mapping, mapping_data_list) not fully initialized.")
          return {"answer": "Error: RAG system not initialized.", "sources": []}
 
     start_time = time.time()
     logger.info(f"Starting RAG process for query: '{user_query}'")
 
-    # 1. Analyze Query for Filters
-    logger.info("Analyzing query for potential filters...")
     filter_analysis = await analyze_query_for_filters(user_query)
     if filter_analysis is None:
         filter_analysis = {}
         logger.warning("Query analysis failed. Proceeding without pre-filtering.")
 
-    # --- MODIFICATION START ---
-    name_filters_were_active = False
-    # Identify if any 'Family' or 'Friends' filters are present
-    # This check should be more robust, ideally based on schema types if 'relation' is consistently used
-    # For now, we'll assume 'Family' and 'Friends' are the primary name fields.
-    name_filter_fields = {'Family', 'Friends'} # Add other potential name fields if necessary
-    active_name_filters = []
-    if 'filters' in filter_analysis:
-        for f in filter_analysis.get('filters', []):
-            if f.get('field') in name_filter_fields:
-                name_filters_were_active = True
-                active_name_filters.append(f) # Store active name filters
-
-    fallback_triggered_due_to_names = False
-    # --- MODIFICATION END ---
-
-    # 2. Pre-filter based on index_to_entry data
-    target_faiss_indices_selector = None
-    # candidate_faiss_indices_after_date_filter: list[int] | None = None # Store candidates after date filter - Removed for now
-
-    # Start with all potential FAISS indices (0 to ntotal-1) mapped to their actual entries
-    # We need to iterate over the entries themselves to check their properties
+    # --- Initialize filter-related variables ---
+    name_filter_fields = {'Family', 'Friends'} 
+    active_name_filters = [] 
+    name_filters_were_active = False 
+    fallback_triggered_due_to_names = False 
     
-    # Ensure mapping_data_list is available and populated
+    tag_filter_fields = {'Tags'}  
+    validated_active_tag_filters = [] 
+    llm_suggested_filters_for_tag_fields = [] 
+    tag_filters_were_active = False 
+    fallback_triggered_due_to_tags = False 
+    llm_attempted_tag_filtering_but_all_were_invalid = False
+
+    non_name_or_tag_field_filters = []
+    raw_llm_filters = filter_analysis.get('filters', [])
+
+    # --- Filter Validation and Grouping Logic ---
+    if raw_llm_filters:
+        logger.debug(f"Raw LLM filters: {json.dumps(raw_llm_filters)}")
+        temp_potential_tag_filters = []
+        for f_filter in raw_llm_filters:
+            field_name = f_filter.get('field')
+            if field_name in name_filter_fields:
+                active_name_filters.append(f_filter) 
+                name_filters_were_active = True 
+            elif field_name in tag_filter_fields:
+                llm_suggested_filters_for_tag_fields.append(f_filter) 
+                tag_filters_were_active = True 
+                temp_potential_tag_filters.append(f_filter)
+            else:
+                non_name_or_tag_field_filters.append(f_filter)
+        
+        if temp_potential_tag_filters: 
+            any_valid_tag_found_for_actual_filtering = False
+            for pt_filter in temp_potential_tag_filters:
+                tag_field_name = pt_filter.get('field')
+                tag_value = pt_filter.get('contains')
+                valid_options_for_field = distinct_metadata_values.get(tag_field_name, set()) if distinct_metadata_values else set()
+                if tag_value and isinstance(tag_value, str) and \
+                   tag_value.lower() in {opt.lower() for opt in valid_options_for_field if isinstance(opt, str)}:
+                    validated_active_tag_filters.append(pt_filter) 
+                    any_valid_tag_found_for_actual_filtering = True
+                    logger.debug(f"Validated tag filter: {pt_filter}")
+                else:
+                    logger.warning(f"LLM suggested invalid tag filter, discarding from active filtering: {pt_filter}. Valid options for '{tag_field_name}': {valid_options_for_field}")
+            if not any_valid_tag_found_for_actual_filtering and tag_filters_were_active:
+                llm_attempted_tag_filtering_but_all_were_invalid = True
+    
+    # --- Apply Filters for Metadata Count ---
     if not mapping_data_list:
         logger.error("mapping_data_list is not populated. Cannot perform filtering.")
         return {"answer": "Error: RAG system data not fully loaded.", "sources": []}
 
-    current_candidates: list[dict] = list(mapping_data_list) # Start with all entries
-    logger.debug(f"Initial candidate entries: {len(current_candidates)}")
+    # Start with all entries, then filter down for the metadata count
+    current_candidates_for_metadata_count: list[dict] = list(mapping_data_list)
+    logger.debug(f"Initial candidates for metadata count: {len(current_candidates_for_metadata_count)}")
 
-
-    if filter_analysis:
-        logger.info(f"Applying filters based on analysis: {json.dumps(filter_analysis)}")
+    if filter_analysis: 
         date_range_filter = filter_analysis.get('date_range')
-        field_filters_from_analysis = filter_analysis.get('filters', [])
-
-        # Apply date filter first
         if date_range_filter and date_range_filter.get('start') and date_range_filter.get('end'):
             try:
                 start_date = date.fromisoformat(date_range_filter['start'])
                 end_date = date.fromisoformat(date_range_filter['end'])
-                logger.info(f"Applying date filter: {start_date.isoformat()} to {end_date.isoformat()}")
-                
-                current_candidates = [
-                    entry for entry in current_candidates
+                logger.info(f"Applying date filter for metadata count: {start_date.isoformat()} to {end_date.isoformat()}")
+                current_candidates_for_metadata_count = [
+                    entry for entry in current_candidates_for_metadata_count
                     if entry.get('entry_date') and isinstance(entry['entry_date'], date) and
                        start_date <= entry['entry_date'] <= end_date
                 ]
-                logger.info(f"After date filter, {len(current_candidates)} candidate entries remain.")
-                # candidate_faiss_indices_after_date_filter = [ # Removed for now
-                #     entry['faiss_index'] for entry in current_candidates if 'faiss_index' in entry
-                # ]
+                logger.info(f"After date filter, {len(current_candidates_for_metadata_count)} candidates remain for metadata count.")
             except ValueError as e:
-                logger.warning(f"Invalid date format in date_range: {date_range_filter}. Skipping date filter. Error: {e}")
+                logger.warning(f"Invalid date format for metadata count: {date_range_filter}. Error: {e}")
         
-        # Separate name filters from other field filters
-        other_field_filters = [f for f in field_filters_from_analysis if f.get('field') not in name_filter_fields]
-
-        # Apply other field filters (e.g., Tags)
-        if other_field_filters:
-            logger.info(f"Applying other field filters: {json.dumps(other_field_filters)}")
-            for f_filter in other_field_filters:
-                field_name = f_filter.get('field')
-                contains_value = f_filter.get('contains')
-                if not field_name or not contains_value:
-                    logger.warning(f"Skipping invalid field filter: {f_filter}")
-                    continue
-                
-                current_candidates = [
-                    entry for entry in current_candidates
-                    if field_name in entry and 
-                       isinstance(entry.get(field_name), list) and # Ensure field exists and is a list
-                       any(contains_value.lower() in item.lower() for item in entry[field_name] if isinstance(item, str))
+        if non_name_or_tag_field_filters:
+            logger.info(f"Applying other (non-name, non-tag) filters for metadata count: {json.dumps(non_name_or_tag_field_filters)}")
+            for f_filter in non_name_or_tag_field_filters:
+                field_name, contains_value = f_filter.get('field'), f_filter.get('contains')
+                if not field_name or not contains_value: continue
+                current_candidates_for_metadata_count = [
+                    e for e in current_candidates_for_metadata_count
+                    if field_name in e and isinstance(e.get(field_name), list) and 
+                       any(contains_value.lower() in str(i).lower() for i in e[field_name])
                 ]
-            logger.info(f"After other field filters, {len(current_candidates)} candidate entries remain.")
+            logger.info(f"After other filters, {len(current_candidates_for_metadata_count)} for metadata count.")
 
-        # --- MODIFICATION START ---
-        # Store candidates before applying name filters, if name filters are active
-        candidates_before_name_filter = list(current_candidates) # Make a copy
-        # candidate_faiss_indices_before_name_filter = [ # Not directly used, list of dicts is primary
-        #     entry['faiss_index'] for entry in candidates_before_name_filter if 'faiss_index' in entry
-        # ]
-        # --- MODIFICATION END ---
-
-        # Apply name filters (Family, Friends) if any were identified
+        candidates_before_tag_filter = list(current_candidates_for_metadata_count)
+        if validated_active_tag_filters:
+            logger.info(f"Applying validated tag filters for metadata count: {json.dumps(validated_active_tag_filters)}")
+            for f in validated_active_tag_filters:
+                fn, cv = f.get('field'), f.get('contains')
+                current_candidates_for_metadata_count = [
+                    e for e in current_candidates_for_metadata_count
+                    if fn in e and isinstance(e.get(fn), list) and any(cv.lower() in str(i).lower() for i in e[fn])
+                ]
+            if not current_candidates_for_metadata_count and validated_active_tag_filters:
+                logger.warning("Validated tags led to 0 for metadata count. Triggering tag fallback.")
+                current_candidates_for_metadata_count = candidates_before_tag_filter
+                fallback_triggered_due_to_tags = True
+            logger.info(f"After validated tags, {len(current_candidates_for_metadata_count)} for metadata count. Fallback: {fallback_triggered_due_to_tags}")
+        elif llm_attempted_tag_filtering_but_all_were_invalid:
+            logger.warning("LLM tags all invalid. Triggering tag fallback for metadata count.")
+            fallback_triggered_due_to_tags = True
+            # current_candidates_for_metadata_count remains as it was after date/other filters
+            logger.info(f"Using {len(current_candidates_for_metadata_count)} for metadata count after invalid tag fallback.")
+            
+        candidates_before_name_filter = list(current_candidates_for_metadata_count)
         if active_name_filters:
-            logger.info(f"Applying name filters (OR logic for multiple name filters): {json.dumps(active_name_filters)}")
-            
-            name_filtered_candidates_faiss_indices = set()
-            temp_candidates_after_name_filter = [] # Build a new list
-
-            for entry in current_candidates: # Iterate over candidates *after* date and other filters
-                entry_matches_a_name_filter = False
-                for name_f in active_name_filters:
-                    field_name = name_f.get('field')
-                    contains_value = name_f.get('contains')
-
-                    if field_name in entry and isinstance(entry.get(field_name), list):
-                        # This handles cases where Family/Friends are lists of strings
-                        # If they are lists of objects {name: "X"}, this needs adjustment
-                        if any(contains_value.lower() in item.lower() for item in entry[field_name] if isinstance(item, str)):
-                            entry_matches_a_name_filter = True
-                            break 
-                
-                if entry_matches_a_name_filter:
-                    temp_candidates_after_name_filter.append(entry)
-            
-            current_candidates = temp_candidates_after_name_filter # Update current_candidates
-            logger.info(f"After name filters, {len(current_candidates)} candidate entries remain.")
-
-            # --- MODIFICATION START: Fallback Logic ---
-            if len(current_candidates) == 0 and name_filters_were_active:
-                logger.warning("Name filters resulted in zero candidates. Attempting fallback to pre-name-filter candidates.")
-                current_candidates = candidates_before_name_filter 
+            logger.info(f"Applying name filters for metadata count: {json.dumps(active_name_filters)}")
+            temp_list = []
+            for entry in current_candidates_for_metadata_count:
+                if any(name_f.get('field') in entry and 
+                       isinstance(entry.get(name_f.get('field')), list) and
+                       any(str(name_f.get('contains')).lower() in str(item).lower() for item in entry[name_f.get('field')]) 
+                       for name_f in active_name_filters):
+                    temp_list.append(entry)
+            current_candidates_for_metadata_count = temp_list
+            if not current_candidates_for_metadata_count and name_filters_were_active:
+                logger.warning("Name filters led to 0 for metadata count. Triggering name fallback.")
+                current_candidates_for_metadata_count = candidates_before_name_filter
                 fallback_triggered_due_to_names = True
-                logger.info(f"Fallback activated. Using {len(current_candidates)} candidates from before name filtering.")
-            # --- MODIFICATION END ---
+            logger.info(f"After name filters, {len(current_candidates_for_metadata_count)} for metadata count. Fallback: {fallback_triggered_due_to_names}")
 
-    # Final list of FAISS indices to search after all filtering
-    final_candidate_faiss_indices: list[int] = [
-        entry['faiss_index'] for entry in current_candidates if 'faiss_index' in entry
-    ]
+    metadata_based_interaction_count = len(current_candidates_for_metadata_count)
+    logger.info(f"Final metadata-based candidate count: {metadata_based_interaction_count}")
 
-    if not final_candidate_faiss_indices:
-        logger.warning("Pre-filtering resulted in zero candidate indices, even after potential fallback.")
-        answer = "Based on your filters (dates, names, tags), no matching entries could be found."
-        # --- MODIFICATION START: More specific message on fallback ---
+    person_names_for_prompt = "the person(s) mentioned"
+    if active_name_filters:
+        names = list(set(f.get('contains') for f in active_name_filters if f.get('contains')))
+        if names: person_names_for_prompt = " and ".join(names)
+    
+    is_how_many_times_person_query = "how many times" in user_query.lower() and active_name_filters
+
+    # --- Introduce new flag and logic for quantitative tag queries ---
+    is_how_many_times_tag_query = False
+    tag_names_for_prompt = ""
+    if "how many times" in user_query.lower() and validated_active_tag_filters and not is_how_many_times_person_query:
+        is_how_many_times_tag_query = True
+        tags = list(set(f.get('contains') for f in validated_active_tag_filters if f.get('contains')))
+        if tags:
+            tag_names_for_prompt = " and ".join(tags)
+        # This log helps confirm the new query type detection
+        logger.info(f"Quantitative tag query detected for tag(s): '{tag_names_for_prompt}'. Metadata count: {metadata_based_interaction_count}.")
+
+    if metadata_based_interaction_count == 0:
+        logger.warning("Metadata filtering resulted in zero candidates.")
+        # Construct more specific "no results" messages based on fallbacks if needed
+        answer = f"Based on your query filters, no matching entries were found for {person_names_for_prompt if active_name_filters else 'your criteria'}."
         if fallback_triggered_due_to_names:
-             answer = "No entries were found with the specified name(s) tagged in the metadata for the given period. After broadening the search, I still couldn't find matching entries in the content."
-        # --- MODIFICATION END ---
+            answer = f"No entries were found explicitly tagged with '{person_names_for_prompt}' for the given period, even after broadening the search."
+        # Add similar specific message for tag fallback if desired
         return {"answer": answer, "sources": []}
 
-    logger.info(f"Proceeding to semantic search with {len(final_candidate_faiss_indices)} candidate indices.")
-    if len(final_candidate_faiss_indices) > index.ntotal: 
-        logger.error(f"Error: Number of candidate indices ({len(final_candidate_faiss_indices)}) exceeds total FAISS index size ({index.ntotal}).")
-        return {"answer": "Internal error during filtering.", "sources": []}
+    # --- Semantic Search for Exemplars (using TOP_K, e.g., 15) ---
+    faiss_indices_for_exemplar_search = [e['faiss_index'] for e in current_candidates_for_metadata_count if 'faiss_index' in e]
+    if not faiss_indices_for_exemplar_search:
+        logger.warning("No FAISS indices available from metadata-filtered candidates for exemplar search.")
+        if is_how_many_times_person_query:
+            return {"answer": f"Based on your journal entries, there appear to be {metadata_based_interaction_count} interactions with {person_names_for_prompt}. However, no specific details could be retrieved for examples.", "sources": []}
+        return {"answer": "Metadata matches found, but no content could be retrieved for examples.", "sources": []}
+
+    unique_faiss_indices_for_exemplars = sorted(list(set(faiss_indices_for_exemplar_search)))
+    exemplar_selector = faiss.IDSelectorBatch(np.array(unique_faiss_indices_for_exemplars, dtype=np.int64))
     
-    # Ensure unique indices if somehow duplicates occurred, though list comprehensions above shouldn't cause this.
-    # Using set for uniqueness before converting to numpy array can be a safeguard.
-    unique_final_candidate_faiss_indices = sorted(list(set(final_candidate_faiss_indices)))
-
-    target_faiss_indices_selector = faiss.IDSelectorBatch(np.array(unique_final_candidate_faiss_indices, dtype=np.int64))
-
-
-    # 3. Embed User Query
-    logger.info("Embedding user query...")
     query_embedding = await get_embedding(user_query)
     if query_embedding is None:
         logger.error("Failed to get embedding for user query.")
+        # Return count if available for quant person query
+        if is_how_many_times_person_query:
+            return {"answer": f"I found {metadata_based_interaction_count} entries for {person_names_for_prompt}, but could not process the query fully to provide details.", "sources": []}
         return {"answer": "Error: Could not process query embedding.", "sources": []}
+    
     query_embedding_np = np.array([query_embedding], dtype=np.float32)
+    effective_k_exemplars = min(TOP_K, len(unique_faiss_indices_for_exemplars))
+    logger.info(f"Performing FAISS search for {effective_k_exemplars} exemplars from {len(unique_faiss_indices_for_exemplars)} candidates...")
 
-    # 4. Perform FAISS Search
-    # k should not exceed the number of items being searched in the selector
-    effective_k = min(TOP_K, len(unique_final_candidate_faiss_indices))
-    logger.info(f"Performing FAISS search (top_k={effective_k}) with {len(unique_final_candidate_faiss_indices)} candidates...")
-    
-    try:
-        if effective_k == 0: # If no candidates, search will fail or return nothing useful
-            logger.warning("FAISS search skipped as effective_k is 0 (no candidates after filtering).")
-            distances, retrieved_indices = (np.array([]), np.array([[]])) # Empty results
+    exemplar_distances, exemplar_retrieved_indices_raw = (np.array([]), np.array([[]]))
+    if effective_k_exemplars > 0:
+        try:
+            sp = faiss.SearchParameters(); sp.sel = exemplar_selector
+            exemplar_distances, exemplar_retrieved_indices_raw = index.search(query_embedding_np, k=effective_k_exemplars, params=sp)
+        except Exception as e:
+            logger.error(f"FAISS search for exemplars failed: {e}", exc_info=True)
+            if is_how_many_times_person_query:
+                return {"answer": f"Based on your journal entries, there were {metadata_based_interaction_count} interactions with {person_names_for_prompt}. Error retrieving examples: {str(e)}", "sources": []}
+            return {"answer": f"Error during semantic search for examples: {str(e)}", "sources": []}
+
+    exemplar_context_for_llm = []
+    exemplar_sources_for_response = []
+    if exemplar_retrieved_indices_raw.size > 0 and exemplar_retrieved_indices_raw[0].size > 0 and exemplar_retrieved_indices_raw[0][0] != -1:
+        for i, faiss_idx in enumerate(exemplar_retrieved_indices_raw[0]):
+            entry_data = index_to_entry.get(int(faiss_idx))
+            if entry_data:
+                content = entry_data.get("content", ""); title = entry_data.get("title", "Untitled Entry")
+                page_id = entry_data.get("page_id")
+                url = entry_data.get("url", "")
+                if not url and page_id: url = f"https://www.notion.so/{str(page_id).replace('-', '')}"
+                
+                entry_date_obj = entry_data.get("entry_date")
+                entry_date_str = entry_date_obj.isoformat() if entry_date_obj else "Unknown date"
+                
+                exemplar_context_for_llm.append(f"Document (ID: {faiss_idx}, Title: {title}, Date: {entry_date_str}, Page ID: {page_id if page_id else 'N/A'}):\n{content}\n---")
+                
+                dist = float(exemplar_distances[0][i]) if exemplar_distances.ndim > 1 and i < exemplar_distances.shape[1] else 0.0
+                exemplar_sources_for_response.append({"title": title, "url": url, "id": str(faiss_idx), "date": entry_date_str, "distance": dist})
+            else: 
+                logger.warning(f"Could not find entry data for exemplar FAISS index: {int(faiss_idx)}")
+    else:
+        logger.warning("FAISS search for exemplars returned no results or invalid indices.")
+
+    if not exemplar_context_for_llm:
+        if is_how_many_times_person_query:
+            return {"answer": f"Based on your journal entries, you interacted with {person_names_for_prompt} {metadata_based_interaction_count} times. No specific examples could be detailed.", "sources": exemplar_sources_for_response}
+        elif is_how_many_times_tag_query: # New branch
+            return {"answer": f"Based on your journal entries, you engaged in activities related to {tag_names_for_prompt} {metadata_based_interaction_count} times. No specific examples could be detailed.", "sources": exemplar_sources_for_response}
         else:
-            # MODIFICATION: Correctly use SearchParameters with the selector
-            search_parameters_with_selector = faiss.SearchParameters()
-            search_parameters_with_selector.sel = target_faiss_indices_selector # target_faiss_indices_selector is an IDSelectorBatch
-            distances, retrieved_indices = index.search(query_embedding_np, k=effective_k, params=search_parameters_with_selector)
-    except Exception as e:
-        logger.error(f"FAISS search failed: {e}", exc_info=True)
-        # --- MODIFICATION START: More specific message on fallback ---
-        answer_on_search_error = "Error during semantic search."
-        if fallback_triggered_due_to_names:
-            answer_on_search_error = "An error occurred while searching the content for the mentioned person(s) after the initial metadata search found no tags."
-        # --- MODIFICATION END ---
-        return {"answer": answer_on_search_error, "sources": []}
+             return {"answer": "Found metadata matches, but no specific content could be detailed for examples.", "sources": exemplar_sources_for_response}
 
-    if retrieved_indices.size == 0 or (retrieved_indices.ndim > 1 and retrieved_indices.shape[1] == 0) or (retrieved_indices.ndim == 1 and retrieved_indices[0] == -1):
-        logger.warning("FAISS search returned no results.")
-        # --- MODIFICATION START: More specific message on fallback ---
-        answer = "No relevant entries found matching your query in the specified context."
-        if fallback_triggered_due_to_names:
-            answer = "While entries were found for the period, none of their content seemed to match your query about the named person(s)."
-        # --- MODIFICATION END ---
-        return {"answer": answer, "sources": []}
-
-    # 5. Retrieve Context and Prepare for LLM
-    context_for_llm = []
-    sources_for_response = []
-    # Ensure retrieved_indices are handled correctly, it's a 2D array
-    retrieved_faiss_original_indices = retrieved_indices[0] 
-
-    logger.info(f"Retrieving context for {len(retrieved_faiss_original_indices)} search results...")
-    for i, faiss_idx_val in enumerate(retrieved_faiss_original_indices):
-        faiss_idx = int(faiss_idx_val) # Ensure it's an int
-        if faiss_idx == -1: continue 
-        
-        entry_data = index_to_entry.get(faiss_idx) 
-        if entry_data:
-            content = entry_data.get("content", "")
-            title = entry_data.get("title", "Untitled Entry")
-            url = entry_data.get("url", "") # Get existing URL if any
-            page_id = entry_data.get("page_id") # Get page_id
-
-            # --- MODIFICATION START: Reconstruct URL if missing and page_id exists ---
-            if not url and page_id:
-                page_id_no_hyphens = str(page_id).replace("-", "")
-                url = f"https://www.notion.so/{page_id_no_hyphens}"
-                logger.debug(f"Constructed URL for page_id {page_id}: {url}")
-            # --- MODIFICATION END ---
-
-            entry_date_obj = entry_data.get("entry_date") 
-            entry_date_str = entry_date_obj.isoformat() if entry_date_obj else "Unknown date"
-            
-            context_for_llm.append(f"Document (ID: {faiss_idx}, Title: {title}, Date: {entry_date_str}):\n{content}\n---")
-            # Ensure distances array matches retrieved_indices structure
-            dist_val = float(distances[0][i]) if distances.ndim > 1 and i < distances.shape[1] else 0.0
-            sources_for_response.append({"title": title, "url": url, "id": str(faiss_idx), "date": entry_date_str, "distance": dist_val})
-        else:
-            logger.warning(f"Could not find entry data for FAISS index: {faiss_idx}")
-
-    if not context_for_llm:
-        logger.warning("No context could be retrieved for the LLM, though search found indices.")
-        # --- MODIFICATION START: More specific message on fallback ---
-        answer = "Could not retrieve content for the found entries."
-        if fallback_triggered_due_to_names:
-            answer = "Found some potentially relevant entries for the period, but could not retrieve their content to check for the named person(s)."
-        # --- MODIFICATION END ---
-        return {"answer": answer, "sources": []}
-
-    # 6. Construct Prompt and Call Final LLM
-    context_str = "\n\n".join(context_for_llm)
+    exemplar_context_str = "\\n\\n".join(exemplar_context_for_llm)
     
-    # Simplified string definition using triple-quoted f-strings
-    formatting_instructions = f"""\n\n**Detailed Instructions for Structuring Your Answer and Referencing Sources:**
+    # --- Define Prompt Templates ---
+    base_system_message_template_general = (
+        "You are an AI assistant functioning as a 'Second Brain.' Your purpose is to help the user recall and synthesize information from their journal entries. "
+        "Respond in a natural, reflective, and narrative style. Organize your answers clearly, often using bolded thematic titles to highlight key memories or points, each followed by descriptive details. "
+        "If the user's query asks a quantitative question (e.g., 'List Y favorite items'), attempt to directly answer this based on the provided document exemplars. "
+        "For 'List X items...' queries, provide the number of items requested if possible from the exemplars. If you find fewer, list those found and state that. "
+        "After addressing any quantitative aspect directly, you can then elaborate with narrative details as appropriate. "
+        "Cite specific journal entries when you draw information from them, as per the detailed formatting instructions provided."
+    )
 
-1.  **Overall Narrative Flow:** Your answer should read like a helpful, reflective summary, as if recalling memories. 
+    base_system_message_template_quant_person = (
+        "You are an AI assistant functioning as a 'Second Brain.' "
+        "The user asked how many times they interacted with {person_name_s}. Based on their journal entries (pre-filtered by metadata), this occurred **{interaction_count}** times during the specified period. " # The count is from metadata.
+        "Your primary task is to **first state this count clearly**. "
+        "Then, provide a natural, reflective, and narrative summary of *some* of these interactions, drawing examples from the {exemplar_count} most textually relevant document exemplars provided below. "
+        "Organize your examples clearly, often using bolded thematic titles. "
+        "Cite specific journal entries (from the exemplars) when you draw information from them, as per the detailed formatting instructions."
+    )
 
-2.  **Introduction (If appropriate):** Begin with a brief introductory sentence or two that generally addresses the user's query before diving into specific examples or themes.
+    base_system_message_template_quant_tag = (
+        "You are an AI assistant functioning as a 'Second Brain.' "
+        "The user asked how many times they engaged in activities related to '{tag_name_s}'. Based on their journal entries (pre-filtered by metadata), this occurred **{interaction_count}** times during the specified period. " # The count is from metadata.
+        "Your primary task is to **first state this count clearly**. "
+        "Then, provide a natural, reflective, and narrative summary of *some* of these occurrences, drawing examples from the {exemplar_count} most textually relevant document exemplars provided below. "
+        "Organize your examples clearly, often using bolded thematic titles. "
+        "Cite specific journal entries (from the exemplars) when you draw information from them, as per the detailed formatting instructions."
+    )
 
-3.  **Thematic Sections (Main Content):**
-    *   Identify key themes, events, or memories from the provided documents relevant to the query.
-    *   For each distinct theme/event, start with a **bolded title** that summarizes it (e.g., `**Hilarious Reactions to Foods:**` or `**Playground Adventures:**`).
-    *   Follow the bolded title with a descriptive paragraph or two elaborating on that theme/event, drawing information from the relevant journal entries.
+    # Shared formatting instructions, with dynamic parts for quant person queries
+    formatting_instructions_template = (
+        "\n\n**Detailed Instructions for Structuring Your Answer and Referencing Sources:**\n\n"
+        "{quantitative_person_intro}" # Placeholder for specific count instruction
+        "1.  **Overall Narrative Flow:** Your answer should read like a helpful, reflective summary, as if recalling memories. \n\n"
+        "2.  **Introduction (If appropriate):** Begin with a brief introductory sentence or two that generally addresses the user's query before diving into specific examples or themes.\n\n"
+        "3.  **Thematic Sections (Main Content/Examples):**\n"
+        "    *   Identify key themes, events, or memories from the provided document exemplars relevant to the query.\n"
+        "    *   For each distinct theme/event you choose to highlight, start with a **bolded title**.\n"
+        "    *   Follow with a descriptive paragraph elaborating on that theme/event, drawing information from the exemplars.\n\n"
+        "4.  **Citing Sources (from Exemplars):**\n"
+        "    *   When you include specific details or direct recollections from an exemplar journal entry, you MUST cite that entry.\n"
+        "    *   Incorporate the citation naturally: create a markdown hyperlink `[Title of Entry](URL)`. \n"
+        "    *   The `URL` part of the hyperlink should be constructed using the 'Page ID' provided in each document's context. To do this: take the 'Page ID' value, remove any hyphens from it, and then append the result to `https://www.notion.so/`. (For example, if a document's context shows 'Page ID: abc-123-def', the URL you construct and use in the citation will be `https://www.notion.so/abc123def`). \n"
+        "    *   IMMEDIATELY follow the `[Title of Entry](URL)` hyperlink with its corresponding date (also from the document's context, labeled 'Date') in parentheses, formatted nicely (e.g., `(January 7, 2025)`). Do NOT include the word \"Date:\" before this parenthetical date.\n\n"
+        "5.  **Concluding Thought (If appropriate).**\n\n"
+        "**Specific Guidance for Non-\"How Many Times Person\" Quantitative Queries:**\n"
+        "{general_quantitative_guidance}" # Placeholder for list guidance
+        "**Important Reminders:**\n"
+        "- Maintain a conversational and engaging tone.\n"
+        "- Ensure the narrative flows logically.\n"
+        "- Do NOT use markdown code blocks for any part of this."
+    )
+    
+    # --- Assemble Final Prompt ---
+    current_base_system_message = ""
+    specific_formatting_quant_intro = "" 
+    specific_formatting_general_quant_guidance = (
+        "*   If the user's primary question is quantitative (and not a 'how many times' query specifically handled by other instructions to state a count first), **you MUST provide the direct numerical answer or list first based on the exemplars.**\n"
+        "*   **For \"List X items...\" queries:** Provide the number of items requested if possible from the exemplars. If you find fewer, list those and state that. \n"
+        "    *   Example: \"Here are 3 hikes you mentioned enjoying: 1. [Hike A](URL) (Date), 2. [Hike B](URL) (Date), 3. [Hike C](URL) (Date).\".\n"
+        "*   If the context (i.e., the number of provided exemplar documents) doesn't allow for the requested number of items for a list, clearly state that.\n"
+    )
 
-4.  **Citing Sources within Thematic Sections:**
-    *   When you include specific details or direct recollections from a journal entry within a thematic section, you MUST cite that entry.
-    *   Incorporate the citation naturally: create a markdown hyperlink `[Title of Entry](Notion URL)` within your narrative sentence or immediately after the relevant phrase.
-    *   IMMEDIATELY follow this hyperlink with its corresponding date in parentheses, formatted nicely (e.g., `(January 7, 2025)`). Do NOT include the word "Date:" before this parenthetical date.
-    *   The Notion URL for the hyperlink is constructed using the entry's Page ID (Document ID from context) by removing hyphens: `https://www.notion.so/<page_id_without_hyphens>`.
+    if is_how_many_times_person_query:
+        logger.info(f"Quantitative person query for '{person_names_for_prompt}'. Metadata count: {metadata_based_interaction_count}. Exemplars: {len(exemplar_context_for_llm)}.")
+        current_base_system_message = base_system_message_template_quant_person.format(
+            person_name_s=person_names_for_prompt, 
+            interaction_count=metadata_based_interaction_count,
+            exemplar_count=len(exemplar_context_for_llm)
+        )
+        specific_formatting_quant_intro = (
+            f"**Stating the Count:** Begin your answer by clearly stating: 'Based on your journal entries, you interacted with {person_names_for_prompt} **{metadata_based_interaction_count}** times during the specified period.' "
+            f"Then, provide a narrative using the {len(exemplar_context_for_llm)} exemplars.\n\n"
+        )
+        specific_formatting_general_quant_guidance = "" # Not needed if specific quant intro is used
 
-5.  **Concluding Thought (If appropriate):** End your entire response with a brief concluding sentence or reflection that summarizes the key takeaways or offers a final thought related to the query.
+    elif is_how_many_times_tag_query: # New branch for quantitative tag queries
+        logger.info(f"Quantitative tag query for '{tag_names_for_prompt}'. Metadata count: {metadata_based_interaction_count}. Exemplars: {len(exemplar_context_for_llm)}.")
+        current_base_system_message = base_system_message_template_quant_tag.format(
+            tag_name_s=tag_names_for_prompt,
+            interaction_count=metadata_based_interaction_count,
+            exemplar_count=len(exemplar_context_for_llm)
+        )
+        specific_formatting_quant_intro = (
+            f"**Stating the Count:** Begin your answer by clearly stating: 'Based on your journal entries, you engaged in activities related to {tag_names_for_prompt} **{metadata_based_interaction_count}** times during the specified period.' "
+            f"Then, provide a narrative using the {len(exemplar_context_for_llm)} exemplars.\n\n"
+        )
+        specific_formatting_general_quant_guidance = "" # Not needed
 
-**Example of a Thematic Section with Citation:**
+    else: # General query
+        logger.info(f"General query type. Exemplars: {len(exemplar_context_for_llm)}.")
+        current_base_system_message = base_system_message_template_general
+        # general_quantitative_guidance is already set as a default for this case
 
-  **First Foods:** Leo's initial encounters with new foods were often amusing. His reactions to trying banana and blackberry, for instance, were particularly funny and endearing ([Leo's Tries Food!](https://www.notion.so/yyyyyyyyy)) (January 7, 2025). He showed a clear preference for the tart and sweet blackberry over the banana.
+    current_formatting_instructions = formatting_instructions_template.format(
+        quantitative_person_intro=specific_formatting_quant_intro,
+        general_quantitative_guidance=specific_formatting_general_quant_guidance
+    )
+    
+    final_system_prompt = current_base_system_message + current_formatting_instructions
 
-**Important Reminders:**
-- Maintain a conversational and engaging tone suitable for memory recall.
-- Ensure the narrative flows logically from introduction, through thematic points, to a conclusion.
-- Do NOT use markdown code blocks for any part of this.
-"""
+    # Apply Fallback Modifications
+    if fallback_triggered_due_to_names: 
+        fallback_intro = f"Note: The initial metadata search for '{person_names_for_prompt}' yielded no direct tags, so the search was broadened. The count of {metadata_based_interaction_count} (if applicable) and the exemplars reflect this. Focus on content for '{person_names_for_prompt}'.\n\n"
+        final_system_prompt = fallback_intro + final_system_prompt
+    elif fallback_triggered_due_to_tags: 
+        original_llm_tags_str = "the specified tag(s)/concept(s)" 
+        if llm_suggested_filters_for_tag_fields: 
+            tag_values = list(set(f.get('contains') for f in llm_suggested_filters_for_tag_fields if f.get('contains')))
+            if tag_values: original_llm_tags_str = " and ".join(tag_values)
+        fallback_intro = f"Note: The initial metadata search for tags '{original_llm_tags_str}' was broadened. The count of {metadata_based_interaction_count} (if applicable) and exemplars reflect this. Focus on concepts related to '{original_llm_tags_str}'.\n\n"
+        final_system_prompt = fallback_intro + final_system_prompt
 
-    base_system_message = f"""You are an AI assistant functioning as a 'Second Brain.' Your purpose is to help the user recall and synthesize information from their journal entries. Respond in a natural, reflective, and narrative style. Organize your answers clearly, often using bolded thematic titles to highlight key memories or points, each followed by descriptive details. Cite specific journal entries when you draw information from them, as per the detailed formatting instructions provided.""" # Emphasized persona and style
-
-    final_system_prompt = base_system_message + formatting_instructions
-
-    if fallback_triggered_due_to_names and active_name_filters:
-        names_in_query = list(set(f.get('contains') for f in active_name_filters if f.get('contains')))
-        names_str = " and ".join(names_in_query) if names_in_query else "the person(s) mentioned"
-        
-        # The fallback_intro will be prepended to the base_system_message for the fallback scenario.
-        # The combined message will then have formatting_instructions appended.
-        fallback_intro = f"""The initial search for entries explicitly tagged with metadata for '{names_str}' in the specified period did not yield results. 
-Therefore, the search was broadened to include entries from that period that might mention '{names_str}' in their content. 
-Please CAREFULLY review the following documents. Your primary goal is to find and synthesize information specifically related to '{names_str}' based on the user's query. 
-If you find relevant information about '{names_str}', present it. 
-If, after reviewing the documents, you still cannot find information about '{names_str}' relevant to the query, CLEARLY state that while these entries are from the correct period, they do not seem to contain the requested information about '{names_str}'.\n\n"""
-        final_system_prompt = fallback_intro + base_system_message + formatting_instructions # Ensure formatting_instructions are included here too
-    # --- MODIFICATION END ---
-
-    user_message_for_final_llm = f"User Query: \"{user_query}\"\n\nRelevant Documents:\n{context_str}"
+    user_message_for_final_llm = f"User Query: \"{user_query}\"\n\nRelevant Documents (exemplars for narrative):\n{exemplar_context_str}"
     
     logger.info("Sending request to final LLM for answer generation...")
-    # logger.debug(f"Final LLM System Prompt: {final_system_prompt}") 
+    # logger.debug(f"Final LLM System Prompt:\n{final_system_prompt}")
 
     try:
         response = await asyncio.to_thread(
@@ -545,20 +608,14 @@ If, after reviewing the documents, you still cannot find information about '{nam
         logger.info("Received answer from final LLM.")
     except Exception as e:
         logger.error(f"Error during final LLM call: {e}", exc_info=True)
-        # --- MODIFICATION START: More specific message on fallback ---
-        answer_on_llm_error = "Error generating final answer."
-        if fallback_triggered_due_to_names:
-            answer_on_llm_error = f"An error occurred while trying to synthesize information about the named person(s) from the retrieved content."
-        # --- MODIFICATION END ---
-        return {"answer": answer_on_llm_error, "sources": sources_for_response}
+        # answer_on_llm_error = "Error generating final answer." # This variable is not used.
+        if is_how_many_times_person_query:
+            return {"answer": f"Based on your records, there are {metadata_based_interaction_count} relevant entries for {person_names_for_prompt}. However, an error occurred generating a detailed summary: {str(e)}", "sources": exemplar_sources_for_response}
+        elif is_how_many_times_tag_query: # New branch
+            return {"answer": f"Based on your records, there are {metadata_based_interaction_count} relevant entries for activities related to {tag_names_for_prompt}. However, an error occurred generating a detailed summary: {str(e)}", "sources": exemplar_sources_for_response}
+        return {"answer": f"An error occurred: {str(e)}", "sources": exemplar_sources_for_response}
 
     end_time = time.time()
     logger.info(f"RAG process completed in {end_time - start_time:.2f} seconds.")
-    
-    # --- ADDED FOR DEBUGGING --- 
-    logger.info(f"Final sources for response: {json.dumps(sources_for_response, indent=2)}")
-    # --- END DEBUGGING --- 
-
-    return {"answer": answer, "sources": sources_for_response}
-
-# ... (any other functions or main block if this file is runnable) ... 
+    logger.info(f"Final sources for response (exemplars): {json.dumps(exemplar_sources_for_response, indent=2)}")
+    return {"answer": answer, "sources": exemplar_sources_for_response}
