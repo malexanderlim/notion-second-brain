@@ -36,47 +36,6 @@ QUERY_ANALYSIS_MODEL = "gpt-4o-mini"
 # Centralized logging setup will be called from main()
 logger = logging.getLogger("cli") # Still get a logger specific to this module
 
-# --- NEW: Query Safety Check Function ---
-def is_query_safe(client: OpenAI, query: str) -> bool:
-    """Checks if the user query is about sensitive topics (e.g., illicit substances) using an LLM.
-
-    Args:
-        client: OpenAI client instance.
-        query: The user's natural language query.
-
-    Returns:
-        True if the query is deemed safe, False otherwise.
-    """
-    logger.info(f"Performing safety check for query: '{query}'")
-    system_prompt = (
-        "You are a query safety classifier. Your task is to determine if the user's query is primarily asking about "
-        "illicit substances or illegal drugs. Answer ONLY with the word 'SAFE' if the query is acceptable, "
-        "or ONLY with the word 'UNSAFE' if the query is primarily about illicit substances or illegal drugs. "
-        "Do not provide explanations."
-    )
-    user_prompt = f"User Query: \"{query}\""
-
-    try:
-        response = client.chat.completions.create(
-            model=QUERY_ANALYSIS_MODEL, # Use the faster/cheaper model
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.0, # Be deterministic
-            max_tokens=5 # Only need SAFE or UNSAFE
-        )
-        decision = response.choices[0].message.content.strip().upper()
-        logger.info(f"Query safety check result: {decision}")
-        return decision == "SAFE"
-
-    except Exception as e:
-        logger.error(f"Error during query safety check LLM call: {e}", exc_info=True)
-        # Default to safe if the check fails? Or unsafe? Let's default to SAFE for now,
-        # but log an error. Could be changed to default UNSAFE for stricter policy.
-        logger.warning("Query safety check failed. Defaulting to SAFE.")
-        return True
-
 # --- Helper Function for Embedding (Duplicated from build_index for MVP) ---
 def get_embedding(client: OpenAI, text: str, retries: int = MAX_EMBEDDING_RETRIES) -> list[float] | None:
     """Gets embedding for text using OpenAI API with retry logic."""
@@ -448,7 +407,7 @@ def handle_query(args):
     logger.info(f"Handling query: '{args.query}'")
 
     # --- Initialize OpenAI Client (needed for safety check first) --- 
-    logger.info("Initializing OpenAI client for query safety check...")
+    logger.info("Initializing OpenAI client for query processing...") # Updated log message
     try:
         if not config.OPENAI_API_KEY:
              logger.error("OPENAI_API_KEY not found.")
@@ -457,12 +416,6 @@ def handle_query(args):
     except Exception as e:
         logger.error(f"Failed to initialize OpenAI client: {e}", exc_info=True)
         sys.exit(1)
-
-    # --- >>> NEW: Perform Safety Check <<< ---
-    if not is_query_safe(openai_client, args.query):
-        print("\nSorry, I cannot provide information on that topic.")
-        sys.exit(0) # Exit gracefully
-    # --- >>> END: Perform Safety Check <<< ---
 
     # --- Proceed with RAG pipeline only if query is safe ---
     # --- Check for prerequisite files (Index, Mapping, Schema, Cache) --- 
