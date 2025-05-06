@@ -6,6 +6,7 @@ python-dotenv
 openai
 faiss-cpu
 # langchain # Or specific langchain components if preferred
+anthropic
 
 # CORS
 fastapi-cors 

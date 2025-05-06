@@ -5,8 +5,15 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { LoaderCircle, X, Info, CalendarDays, Link as LinkIcon } from 'lucide-react'; // Added CalendarDays & LinkIcon
+import { LoaderCircle, X, Info, CalendarDays, Link as LinkIcon, WandSparkles } from 'lucide-react'; // Added WandSparkles for model
 import ReactMarkdown from 'react-markdown'; // Import ReactMarkdown
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 // Import a suitable loader icon if needed later, e.g., from lucide-react
 // import { LoaderCircle } from 'lucide-react';
 
@@ -22,6 +29,12 @@ interface SourceDocument {
 interface QueryResponse {
   answer: string;
   sources: SourceDocument[];
+  model_used?: string;
+  model_api_id_used?: string; // NEW
+  model_provider_used?: string; // NEW
+  input_tokens?: number; // NEW
+  output_tokens?: number; // NEW
+  estimated_cost_usd?: number; // NEW
 }
 
 // Constants for suggestion logic
@@ -46,12 +59,36 @@ const formatDate = (dateString: string | undefined): string => {
 };
 // --- MODIFICATION END ---
 
+// NEW: Define available models
+// These keys (e.g., "gpt-4o") should match the keys in your backend's MODEL_CONFIG
+const AVAILABLE_MODELS = [
+  { value: "gpt-4o", label: "GPT-4o (Advanced multimodal, fast, 128K context)" },
+  { value: "gpt-4-turbo", label: "GPT-4 Turbo (High-capability, 128K context)" },
+  { value: "gpt-4o-mini", label: "GPT-4o mini (Fast, affordable, 128K context)" },
+  { value: "gpt-3.5-turbo", label: "GPT-3.5 Turbo (Cost-effective, 16K context)" },
+  { value: "claude-3-7-sonnet-20250219", label: "Anthropic Claude 3.7 Sonnet (Most intelligent, 200K context)" },
+  { value: "claude-3-5-sonnet-20241022", label: "Anthropic Claude 3.5 Sonnet (High intelligence, 200K context)" },
+  { value: "claude-3-opus-20240229", label: "Anthropic Claude 3 Opus (Powerful, complex tasks, 200K context)" },
+  { value: "claude-3-5-haiku-20241022", label: "Anthropic Claude 3.5 Haiku (Fastest, 200K context)" },
+];
+const DEFAULT_MODEL = AVAILABLE_MODELS[0].value; // Default to GPT-4o
+
 function App() {
   const [query, setQuery] = useState<string>("");
   const [response, setResponse] = useState<QueryResponse | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestion, setSuggestion] = useState<string | null>(null); // New state for suggestion
+  // NEW: State for model selection
+  const [selectedModel, setSelectedModel] = useState<string>(DEFAULT_MODEL);
+  // NEW: State to display the model used for the response
+  const [modelUsedInResponse, setModelUsedInResponse] = useState<string | null>(null);
+  // NEW: State for additional response details
+  const [modelApiIdUsed, setModelApiIdUsed] = useState<string | null>(null);
+  const [modelProviderUsed, setModelProviderUsed] = useState<string | null>(null);
+  const [inputTokens, setInputTokens] = useState<number | null>(null);
+  const [outputTokens, setOutputTokens] = useState<number | null>(null);
+  const [estimatedCost, setEstimatedCost] = useState<number | null>(null);
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000"; // Use env var or default
 
@@ -78,11 +115,21 @@ function App() {
     setError(null);
     setResponse(null);
     setSuggestion(null); // Reset suggestion on new submission
+    setModelUsedInResponse(null); // NEW: Reset model used on new submission
+    // NEW: Reset additional details on new submission
+    setModelApiIdUsed(null);
+    setModelProviderUsed(null);
+    setInputTokens(null);
+    setOutputTokens(null);
+    setEstimatedCost(null);
 
     try {
       const result = await axios.post<QueryResponse>(
         `${backendUrl}/api/query`,
-        { query: submittedQuery }, // Use the stored query
+        { 
+          query: submittedQuery,
+          model_name: selectedModel // NEW: Send selectedModel as model_name
+        },
         {
           headers: { 'Content-Type': 'application/json' }
         }
@@ -95,6 +142,16 @@ function App() {
       }
       // --- END DEBUGGING ---
       setResponse(result.data);
+      // NEW: Set the model used from the response
+      if (result.data.model_used) {
+        setModelUsedInResponse(result.data.model_used);
+      }
+      // NEW: Set additional details from response
+      if (result.data.model_api_id_used) setModelApiIdUsed(result.data.model_api_id_used);
+      if (result.data.model_provider_used) setModelProviderUsed(result.data.model_provider_used);
+      if (result.data.input_tokens !== undefined) setInputTokens(result.data.input_tokens);
+      if (result.data.output_tokens !== undefined) setOutputTokens(result.data.output_tokens);
+      if (result.data.estimated_cost_usd !== undefined) setEstimatedCost(result.data.estimated_cost_usd);
     } catch (err: any) {
       console.error("API Error:", err);
       let errorMessage = "Failed to fetch response from the backend.";
@@ -116,6 +173,14 @@ function App() {
     setResponse(null);
     setError(null);
     setSuggestion(null); // Clear suggestion on manual clear
+    setModelUsedInResponse(null); // NEW: Clear model used
+    setSelectedModel(DEFAULT_MODEL); // NEW: Reset model to default
+    // NEW: Clear additional details
+    setModelApiIdUsed(null);
+    setModelProviderUsed(null);
+    setInputTokens(null);
+    setOutputTokens(null);
+    setEstimatedCost(null);
   };
 
   // Determine if the clear button should be disabled
@@ -126,6 +191,23 @@ function App() {
       <div className="w-full max-w-2xl space-y-8">
         <h1 className="text-3xl font-bold text-center">Query Your Second Brain</h1>
         
+        {/* NEW: Model Selector Dropdown */}
+        <div className="flex flex-col space-y-1.5">
+          <label htmlFor="model-select" className="text-sm font-medium text-foreground">Select Model:</label>
+          <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
+            <SelectTrigger id="model-select" className="w-full">
+              <SelectValue placeholder="Select a model" />
+            </SelectTrigger>
+            <SelectContent>
+              {AVAILABLE_MODELS.map(model => (
+                <SelectItem key={model.value} value={model.value}>
+                  {model.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
         <form onSubmit={handleSubmit} className="flex gap-2 items-center">
           <Input 
             type="text"
@@ -196,6 +278,27 @@ function App() {
           <Card className="w-full">
             <CardHeader>
               <CardTitle>Answer</CardTitle>
+              {/* Display model used for the response */}
+              {modelUsedInResponse && (
+                <div className="text-xs text-muted-foreground pt-1 flex items-center">
+                  <WandSparkles className="h-3 w-3 mr-1.5" /> 
+                  Processed by: {AVAILABLE_MODELS.find(m => m.value === modelUsedInResponse)?.label || modelUsedInResponse}
+                </div>
+              )}
+              {/* NEW: Display additional details */}
+              {modelProviderUsed && (
+                <div className="text-xs text-muted-foreground pt-0.5">Provider: {modelProviderUsed}</div>
+              )}
+              {(inputTokens !== null || outputTokens !== null) && (
+                <div className="text-xs text-muted-foreground pt-0.5">
+                  Tokens: {inputTokens ?? 'N/A'} (prompt) / {outputTokens ?? 'N/A'} (completion)
+                </div>
+              )}
+              {estimatedCost !== null && (
+                <div className="text-xs text-muted-foreground pt-0.5">
+                  Estimated Cost: ${estimatedCost.toFixed(6)} 
+                </div>
+              )}
             </CardHeader>
             <CardContent>
               {/* Use ReactMarkdown to render the answer */}
