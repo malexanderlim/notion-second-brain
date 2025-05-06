@@ -228,6 +228,10 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Task 3.5 (Backend - `rag_query.py`): Ensure cost calculation (Task 1.3) works for Anthropic models (for final answer generation).
   - [ ] **Phase 4: Testing & Verification**
     - [ ] Task 4.1 (Frontend - `App.tsx` & Backend): Verify full end-to-end functionality for both OpenAI and Anthropic models, including correct RAG answers, model info display, token counts, and cost estimation.
+      - [x] Initial testing performed for OpenAI (gpt-4o, gpt-4o-mini) and Anthropic (Claude 3.5 Haiku).
+      - [x] Backend `MODEL_CONFIG` updated to include correct API IDs and pricing for tested models.
+      - [x] Identified and fixed issues related to model key mismatches between frontend selection and backend configuration.
+      - [ ] Further testing across a wider range of queries and edge cases recommended.
   - [ ] **Documentation & Design:**
     - [x] Create `design/MODEL_SELECTION_COST_TDD.md` outlining the design for this feature.
 

@@ -21,46 +21,67 @@ MAPPING_PATH = "index_mapping.json"
 METADATA_CACHE_PATH = "metadata_cache.json"
 DATABASE_SCHEMA_PATH = "schema.json" # Corrected schema path
 OPENAI_EMBEDDING_MODEL_ID = "text-embedding-ada-002" # Used for initial embedding
-DEFAULT_QUERY_ANALYSIS_MODEL_KEY = "gpt-4o" # User-facing name
-DEFAULT_FINAL_ANSWER_MODEL_KEY = "gpt-4o" # User-facing name
+DEFAULT_QUERY_ANALYSIS_MODEL_KEY = "gpt-4o" # User-facing name for query analysis
+DEFAULT_FINAL_ANSWER_MODEL_KEY = "gpt-4o-mini" # Default to gpt-4o-mini for cost-effectiveness
 
 MODEL_CONFIG = {
     "gpt-4o": {
         "api_id": "gpt-4o",
         "provider": "openai",
-        "cost_per_input_token": 0.005 / 1000,  # Example cost for gpt-4o
-        "cost_per_output_token": 0.015 / 1000, # Example cost for gpt-4o
-        "max_output_tokens": 4096, # Standard for gpt-4o
+        "cost_per_input_token": 5.00 / 1_000_000,  # $5.00 / 1M tokens
+        "cost_per_output_token": 15.00 / 1_000_000, # $15.00 / 1M tokens
+        "max_output_tokens": 4096, 
     },
-    "text-embedding-ada-002": { # Specific for embeddings
+    "gpt-4o-mini": { 
+        "api_id": "gpt-4o-mini",
+        "provider": "openai",
+        "cost_per_input_token": 0.15 / 1_000_000, # $0.15 / 1M tokens
+        "cost_per_output_token": 0.60 / 1_000_000,  # $0.60 / 1M tokens
+        "max_output_tokens": 16384, 
+    },
+    "text-embedding-ada-002": { 
         "api_id": "text-embedding-ada-002",
         "provider": "openai",
-        "cost_per_input_token": 0.0001 / 1000, # Cost for text-embedding-ada-002
-        "cost_per_output_token": 0, # Embeddings don't have output tokens in the same way
-        "max_output_tokens": 0, # Not applicable
+        "cost_per_input_token": 0.10 / 1_000_000, # $0.10 / 1M tokens (OpenAI pricing page)
+        "cost_per_output_token": 0, 
+        "max_output_tokens": 0, 
     },
-    "claude-3-opus-20240229": { # Example Anthropic Model
+    "claude-3-opus-20240229": { 
         "api_id": "claude-3-opus-20240229",
         "provider": "anthropic",
-        "cost_per_input_token": 15.00 / 1_000_000, # Example cost from Anthropic
-        "cost_per_output_token": 75.00 / 1_000_000, # Example cost from Anthropic
-        "max_output_tokens": 4096, # Example from Anthropic documentation
+        "cost_per_input_token": 15.00 / 1_000_000, 
+        "cost_per_output_token": 75.00 / 1_000_000, 
+        "max_output_tokens": 4096, 
     },
-    "claude-3-sonnet-20240229": { # Example Anthropic Model
+    "claude-3-sonnet-20240229": { 
         "api_id": "claude-3-sonnet-20240229",
         "provider": "anthropic",
         "cost_per_input_token": 3.00 / 1_000_000, 
         "cost_per_output_token": 15.00 / 1_000_000,
         "max_output_tokens": 4096,
     },
-     "claude-3-haiku-20240307": { # Example Anthropic Model
+     "claude-3-haiku-20240307": { 
         "api_id": "claude-3-haiku-20240307",
         "provider": "anthropic",
         "cost_per_input_token": 0.25 / 1_000_000,
         "cost_per_output_token": 1.25 / 1_000_000,
-        "max_output_tokens": 4096, # Max output tokens for Haiku
+        "max_output_tokens": 4096, 
     },
-    # Add other models here as needed
+    "claude-3-5-haiku-20241022": { # Added based on user provided link and screenshot
+        "api_id": "claude-3-5-haiku-20241022",
+        "provider": "anthropic",
+        "cost_per_input_token": 0.80 / 1_000_000, # $0.80 / 1M input tokens
+        "cost_per_output_token": 4.00 / 1_000_000,  # $4.00 / 1M output tokens
+        "max_output_tokens": 8192, # Max output for Claude 3.5 Haiku
+    },
+    # Add other models here as needed, e.g., Claude 3.5 Sonnet when UI supports it
+    # "claude-3-5-sonnet-20240620": {
+    #     "api_id": "claude-3-5-sonnet-20240620",
+    #     "provider": "anthropic",
+    #     "cost_per_input_token": 3.00 / 1_000_000,
+    #     "cost_per_output_token": 15.00 / 1_000_000,
+    #     "max_output_tokens": 8192,
+    # },
 }
 
 # TOP_K, MAX_EMBEDDING_RETRIES, EMBEDDING_RETRY_DELAY remain the same
@@ -427,6 +448,9 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
     final_answer_model_key = model_name if model_name and model_name in MODEL_CONFIG else DEFAULT_FINAL_ANSWER_MODEL_KEY
     selected_model_config = MODEL_CONFIG.get(final_answer_model_key)
 
+    # This log will help confirm which model key is being resolved
+    logger.info(f"API request for model_name: '{model_name}'. Resolved to final_answer_model_key: '{final_answer_model_key}'")
+
     if not selected_model_config:
         logger.error(f"Model configuration not found for key: {final_answer_model_key}. Cannot proceed.")
         response_data["answer"] = f"Error: Model configuration for '{final_answer_model_key}' not found."
@@ -464,6 +488,9 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
 
     # --- Query Analysis ---
     query_analysis_model_key_to_use = DEFAULT_QUERY_ANALYSIS_MODEL_KEY # Could be made configurable later
+    # For query analysis, we might want to stick to a more powerful model or make it independently selectable.
+    # If we used gpt-4o-mini for analysis, its capabilities for that specific task might be different.
+    # The DEFAULT_QUERY_ANALYSIS_MODEL_KEY is still gpt-4o.
     
     analysis_input_tokens = 0
     analysis_output_tokens = 0
