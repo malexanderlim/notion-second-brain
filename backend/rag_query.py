@@ -167,6 +167,11 @@ async def analyze_query_for_filters(query: str) -> dict | None:
     if not openai_client: logger.error("OpenAI client not initialized."); return None
     if not schema_properties: logger.warning("Database schema not loaded. Query analysis will proceed without schema context."); current_schema = {}
     else: current_schema = schema_properties
+    
+    # --- MODIFICATION START: Add current date to prompt ---
+    current_date_str = date.today().isoformat()
+    # --- MODIFICATION END ---
+
     field_descriptions = []
     current_distinct_values = distinct_metadata_values or {}
     for name, details in current_schema.items():
@@ -184,6 +189,9 @@ async def analyze_query_for_filters(query: str) -> dict | None:
         "You are a query analysis assistant. Your task is to analyze the user query and the available Notion database fields "
         "(including known values for some fields, if provided) to extract structured filters. Identify potential entities like names, tags, dates, or date ranges mentioned in the query "
         "and map them to the most relevant field based on the provided schema AND the known values (if available). Format the output as a JSON object. "
+        # --- MODIFICATION START: Add current date instruction ---
+        f"Today's date is {current_date_str}. Use this as the reference for any relative date calculations (e.g., 'last month', 'past 6 months'). "
+        # --- MODIFICATION END ---
         "Recognize date ranges (like 'last year', '2024', 'next month', 'June 2023'). For date ranges, output a 'date_range' key "
         "with 'start' and 'end' sub-keys in 'YYYY-MM-DD' format. For specific field value filters, output a 'filters' key containing "
         "a list of objects, where each object has 'field' (the Notion property name) and 'contains' (the value extracted from the query). "
@@ -224,8 +232,8 @@ Analyze the query based ONLY on the schema (if provided), known values (if provi
 async def perform_rag_query(user_query: str) -> dict:
     """Performs the full RAG process assuming mapping data is a list."""
     # Use the globally loaded and processed data
-    if not all([openai_client, index, index_to_entry]): # Check core components
-         logger.error("RAG system core components (client, index, index->entry mapping) not fully initialized.")
+    if not all([openai_client, index, index_to_entry, mapping_data_list]): # Added mapping_data_list for safety
+         logger.error("RAG system core components (client, index, index->entry mapping, mapping_data_list) not fully initialized.")
          return {"answer": "Error: RAG system not initialized.", "sources": []}
 
     start_time = time.time()
@@ -234,233 +242,323 @@ async def perform_rag_query(user_query: str) -> dict:
     # 1. Analyze Query for Filters
     logger.info("Analyzing query for potential filters...")
     filter_analysis = await analyze_query_for_filters(user_query)
-    if filter_analysis is None: filter_analysis = {}; logger.warning("Query analysis failed. Proceeding without pre-filtering.")
+    if filter_analysis is None:
+        filter_analysis = {}
+        logger.warning("Query analysis failed. Proceeding without pre-filtering.")
+
+    # --- MODIFICATION START ---
+    name_filters_were_active = False
+    # Identify if any 'Family' or 'Friends' filters are present
+    # This check should be more robust, ideally based on schema types if 'relation' is consistently used
+    # For now, we'll assume 'Family' and 'Friends' are the primary name fields.
+    name_filter_fields = {'Family', 'Friends'} # Add other potential name fields if necessary
+    active_name_filters = []
+    if 'filters' in filter_analysis:
+        for f in filter_analysis.get('filters', []):
+            if f.get('field') in name_filter_fields:
+                name_filters_were_active = True
+                active_name_filters.append(f) # Store active name filters
+
+    fallback_triggered_due_to_names = False
+    # --- MODIFICATION END ---
 
     # 2. Pre-filter based on index_to_entry data
-    target_faiss_indices_selector = None # Use IDSelectorBatch if filtering occurs
-    # Start with all potential FAISS indices (0 to ntotal-1)
-    candidate_indices = list(range(index.ntotal)) 
+    target_faiss_indices_selector = None
+    # candidate_faiss_indices_after_date_filter: list[int] | None = None # Store candidates after date filter - Removed for now
+
+    # Start with all potential FAISS indices (0 to ntotal-1) mapped to their actual entries
+    # We need to iterate over the entries themselves to check their properties
+    
+    # Ensure mapping_data_list is available and populated
+    if not mapping_data_list:
+        logger.error("mapping_data_list is not populated. Cannot perform filtering.")
+        return {"answer": "Error: RAG system data not fully loaded.", "sources": []}
+
+    current_candidates: list[dict] = list(mapping_data_list) # Start with all entries
+    logger.debug(f"Initial candidate entries: {len(current_candidates)}")
+
 
     if filter_analysis:
         logger.info(f"Applying filters based on analysis: {json.dumps(filter_analysis)}")
-        date_range = filter_analysis.get('date_range')
-        field_filters = filter_analysis.get('filters', [])
+        date_range_filter = filter_analysis.get('date_range')
+        field_filters_from_analysis = filter_analysis.get('filters', [])
 
-        # Apply date filter
-        if date_range and date_range.get('start') and date_range.get('end'):
+        # Apply date filter first
+        if date_range_filter and date_range_filter.get('start') and date_range_filter.get('end'):
             try:
-                start_date_filter = date.fromisoformat(date_range['start'])
-                end_date_filter = date.fromisoformat(date_range['end'])
-                logger.info(f"Applying date filter: {start_date_filter} to {end_date_filter}")
-                new_candidate_indices = []
-                for idx in candidate_indices:
-                    # Use index_to_entry to get data for the current FAISS index
-                    entry = index_to_entry.get(idx) 
-                    entry_date = entry.get('entry_date') if entry else None
-                    if entry_date and isinstance(entry_date, date):
-                        if start_date_filter <= entry_date <= end_date_filter:
-                            new_candidate_indices.append(idx)
-                candidate_indices = new_candidate_indices
-                logger.info(f"After date filter, {len(candidate_indices)} candidates remain.")
-            except ValueError:
-                logger.warning(f"Invalid date format in filter: {date_range}. Skipping date filter.")
+                start_date = date.fromisoformat(date_range_filter['start'])
+                end_date = date.fromisoformat(date_range_filter['end'])
+                logger.info(f"Applying date filter: {start_date.isoformat()} to {end_date.isoformat()}")
+                
+                current_candidates = [
+                    entry for entry in current_candidates
+                    if entry.get('entry_date') and isinstance(entry['entry_date'], date) and
+                       start_date <= entry['entry_date'] <= end_date
+                ]
+                logger.info(f"After date filter, {len(current_candidates)} candidate entries remain.")
+                # candidate_faiss_indices_after_date_filter = [ # Removed for now
+                #     entry['faiss_index'] for entry in current_candidates if 'faiss_index' in entry
+                # ]
+            except ValueError as e:
+                logger.warning(f"Invalid date format in date_range: {date_range_filter}. Skipping date filter. Error: {e}")
+        
+        # Separate name filters from other field filters
+        other_field_filters = [f for f in field_filters_from_analysis if f.get('field') not in name_filter_fields]
 
-        # Apply field filters (using AND logic between different fields, OR for Family/Friends)
-        if field_filters:
-            name_filters = [f for f in field_filters if f.get('field') in ['Family', 'Friends'] and f.get('contains')]
-            other_filters = [f for f in field_filters if f.get('field') not in ['Family', 'Friends'] and f.get('field') and f.get('contains')]
+        # Apply other field filters (e.g., Tags)
+        if other_field_filters:
+            logger.info(f"Applying other field filters: {json.dumps(other_field_filters)}")
+            for f_filter in other_field_filters:
+                field_name = f_filter.get('field')
+                contains_value = f_filter.get('contains')
+                if not field_name or not contains_value:
+                    logger.warning(f"Skipping invalid field filter: {f_filter}")
+                    continue
+                
+                current_candidates = [
+                    entry for entry in current_candidates
+                    if field_name in entry and 
+                       isinstance(entry.get(field_name), list) and # Ensure field exists and is a list
+                       any(contains_value.lower() in item.lower() for item in entry[field_name] if isinstance(item, str))
+                ]
+            logger.info(f"After other field filters, {len(current_candidates)} candidate entries remain.")
 
-            # Apply 'other' filters (AND logic)
-            for f in other_filters:
-                field = f['field']; contains = f['contains'].lower()
-                logger.info(f"Applying filter: Field '{field}' contains '{contains}'")
-                new_candidate_indices = []
-                for idx in candidate_indices:
-                    entry = index_to_entry.get(idx) # Get data via FAISS index
-                    value = entry.get(field) if entry else None
-                    match = False
-                    if isinstance(value, str): match = contains in value.lower()
-                    elif isinstance(value, (list, set)): match = any(contains in str(item).lower() for item in value)
-                    elif value is not None: match = contains in str(value).lower()
-                    if match: new_candidate_indices.append(idx)
-                candidate_indices = new_candidate_indices
-                logger.info(f"After filter '{field}', {len(candidate_indices)} candidates remain.")
+        # --- MODIFICATION START ---
+        # Store candidates before applying name filters, if name filters are active
+        candidates_before_name_filter = list(current_candidates) # Make a copy
+        # candidate_faiss_indices_before_name_filter = [ # Not directly used, list of dicts is primary
+        #     entry['faiss_index'] for entry in candidates_before_name_filter if 'faiss_index' in entry
+        # ]
+        # --- MODIFICATION END ---
 
-            # Apply 'name' filters (OR logic)
-            if name_filters:
-                logger.info(f"Applying name filters (OR logic): {name_filters}")
-                names_to_check = {f['contains'].lower() for f in name_filters}
-                new_candidate_indices = []
-                for idx in candidate_indices:
-                    entry = index_to_entry.get(idx) # Get data via FAISS index
-                    if not entry: continue
-                    matches_name = False
-                    for field in ['Family', 'Friends']:
-                        value = entry.get(field)
-                        if isinstance(value, (list, set)): matches_name = any(name in str(item).lower() for item in value for name in names_to_check)
-                        elif isinstance(value, str): matches_name = any(name in value.lower() for name in names_to_check)
-                        if matches_name: break
-                    if matches_name: new_candidate_indices.append(idx)
-                candidate_indices = new_candidate_indices
-                logger.info(f"After name filters, {len(candidate_indices)} candidates remain.")
+        # Apply name filters (Family, Friends) if any were identified
+        if active_name_filters:
+            logger.info(f"Applying name filters (OR logic for multiple name filters): {json.dumps(active_name_filters)}")
+            
+            name_filtered_candidates_faiss_indices = set()
+            temp_candidates_after_name_filter = [] # Build a new list
 
-        # Final set of FAISS indices to target
-        if not candidate_indices:
-            logger.warning("Pre-filtering resulted in zero candidate indices.")
-            # Return specific message if filters were applied
-            if date_range or field_filters:
-                 return {"answer": "Based on your filters (dates, names, tags), no matching entries could be found.", "sources": []}
-            else: # Should not happen if filter_analysis was true, but indicates no results anyway
-                target_faiss_indices_selector = None # Search all if no filters and somehow candidates are empty
-        else:
-            logger.info(f"Pre-filtering successful. Targeting {len(candidate_indices)} specific indices.")
-            target_faiss_indices_selector = faiss.IDSelectorBatch(np.array(candidate_indices, dtype='int64'))
-    else:
-        logger.info("No filters extracted or applied. Searching entire index.")
-        # target_faiss_indices_selector remains None
+            for entry in current_candidates: # Iterate over candidates *after* date and other filters
+                entry_matches_a_name_filter = False
+                for name_f in active_name_filters:
+                    field_name = name_f.get('field')
+                    contains_value = name_f.get('contains')
 
-    # 3. Get Query Embedding
-    logger.info("Getting embedding for the user query...")
+                    if field_name in entry and isinstance(entry.get(field_name), list):
+                        # This handles cases where Family/Friends are lists of strings
+                        # If they are lists of objects {name: "X"}, this needs adjustment
+                        if any(contains_value.lower() in item.lower() for item in entry[field_name] if isinstance(item, str)):
+                            entry_matches_a_name_filter = True
+                            break 
+                
+                if entry_matches_a_name_filter:
+                    temp_candidates_after_name_filter.append(entry)
+            
+            current_candidates = temp_candidates_after_name_filter # Update current_candidates
+            logger.info(f"After name filters, {len(current_candidates)} candidate entries remain.")
+
+            # --- MODIFICATION START: Fallback Logic ---
+            if len(current_candidates) == 0 and name_filters_were_active:
+                logger.warning("Name filters resulted in zero candidates. Attempting fallback to pre-name-filter candidates.")
+                current_candidates = candidates_before_name_filter 
+                fallback_triggered_due_to_names = True
+                logger.info(f"Fallback activated. Using {len(current_candidates)} candidates from before name filtering.")
+            # --- MODIFICATION END ---
+
+    # Final list of FAISS indices to search after all filtering
+    final_candidate_faiss_indices: list[int] = [
+        entry['faiss_index'] for entry in current_candidates if 'faiss_index' in entry
+    ]
+
+    if not final_candidate_faiss_indices:
+        logger.warning("Pre-filtering resulted in zero candidate indices, even after potential fallback.")
+        answer = "Based on your filters (dates, names, tags), no matching entries could be found."
+        # --- MODIFICATION START: More specific message on fallback ---
+        if fallback_triggered_due_to_names:
+             answer = "No entries were found with the specified name(s) tagged in the metadata for the given period. After broadening the search, I still couldn't find matching entries in the content."
+        # --- MODIFICATION END ---
+        return {"answer": answer, "sources": []}
+
+    logger.info(f"Proceeding to semantic search with {len(final_candidate_faiss_indices)} candidate indices.")
+    if len(final_candidate_faiss_indices) > index.ntotal: 
+        logger.error(f"Error: Number of candidate indices ({len(final_candidate_faiss_indices)}) exceeds total FAISS index size ({index.ntotal}).")
+        return {"answer": "Internal error during filtering.", "sources": []}
+    
+    # Ensure unique indices if somehow duplicates occurred, though list comprehensions above shouldn't cause this.
+    # Using set for uniqueness before converting to numpy array can be a safeguard.
+    unique_final_candidate_faiss_indices = sorted(list(set(final_candidate_faiss_indices)))
+
+    target_faiss_indices_selector = faiss.IDSelectorBatch(np.array(unique_final_candidate_faiss_indices, dtype=np.int64))
+
+
+    # 3. Embed User Query
+    logger.info("Embedding user query...")
     query_embedding = await get_embedding(user_query)
-    if query_embedding is None: return {"answer": "Error: Could not process query embedding.", "sources": []}
+    if query_embedding is None:
+        logger.error("Failed to get embedding for user query.")
+        return {"answer": "Error: Could not process query embedding.", "sources": []}
+    query_embedding_np = np.array([query_embedding], dtype=np.float32)
 
     # 4. Perform FAISS Search
-    k = TOP_K
-    query_embedding_np = np.array([query_embedding]).astype('float32')
-    retrieved_indices = []
+    # k should not exceed the number of items being searched in the selector
+    effective_k = min(TOP_K, len(unique_final_candidate_faiss_indices))
+    logger.info(f"Performing FAISS search (top_k={effective_k}) with {len(unique_final_candidate_faiss_indices)} candidates...")
+    
     try:
-        logger.info(f"Performing FAISS search (k={k})...")
-        search_params = faiss.SearchParametersIVF(sel=target_faiss_indices_selector) if target_faiss_indices_selector else None
-        distances, indices_result = index.search(query_embedding_np, k, params=search_params)
-        
-        if indices_result.size > 0:
-             valid_indices = [idx for idx in indices_result[0] if idx != -1]
-             if valid_indices:
-                 retrieved_indices = valid_indices
-                 logger.info(f"FAISS search completed. Retrieved {len(retrieved_indices)} potential indices.")
-             else: logger.warning("FAISS search returned only invalid (-1) indices.")
-        else: logger.warning("FAISS search returned no results.")
-             
-    except Exception as e:
-        logger.error(f"Error during FAISS search: {e}", exc_info=True)
-        return {"answer": "Error: Failed during similarity search.", "sources": []}
-
-    # 5. Retrieve Context & Source Information using index_to_entry
-    context_parts = []; sources = []; retrieved_faiss_indices = set()
-    if not retrieved_indices: logger.warning("No relevant documents found after search.")
-
-    logger.info("Retrieving content for top results...")
-    for idx in retrieved_indices:
-        if idx in retrieved_faiss_indices: continue # Skip duplicates from search if any
-        entry_data = index_to_entry.get(idx)
-        if entry_data:
-            retrieved_faiss_indices.add(idx)
-            content = entry_data.get('content', '')
-            page_id = entry_data.get('page_id') 
-            page_id_for_log = page_id if page_id else f'index {idx}'
-            title = entry_data.get('title', f"Untitled Entry ({page_id_for_log})") 
-            
-            # >>> ADD LOGGING SIMILAR TO CLI <<<
-            entry_date_value = entry_data.get('entry_date')
-            entry_date_str_for_log = None
-            if isinstance(entry_date_value, date):
-                 entry_date_str_for_log = entry_date_value.strftime('%Y-%m-%d')
-            elif isinstance(entry_date_value, str):
-                 entry_date_str_for_log = entry_date_value
-            # Find the distance if available (requires searching with distances)
-            # Note: The current `index.search` call doesn't seem to retain distances alongside indices easily here.
-            # We'll log without distance for now, which is the crucial part.
-            logger.info(f"  - Retrieved Context: ID: {page_id_for_log}, Title: {title}, Date: {entry_date_str_for_log}")
-            # >>> END LOGGING <<<
-            
-            entry_date_value = entry_data.get('entry_date') 
-            entry_date_obj = None
-            entry_date_str = None
-            if isinstance(entry_date_value, date):
-                entry_date_obj = entry_date_value
-                entry_date_str = entry_date_obj.strftime('%Y-%m-%d')
-            elif isinstance(entry_date_value, str):
-                entry_date_str = entry_date_value
-                try:
-                    entry_date_obj = date.fromisoformat(entry_date_value) 
-                except ValueError:
-                    logger.warning(f"Context: Could not parse date string: {entry_date_value} for entry {page_id_for_log}")
-
-            # Construct context string
-            context_entry = f"""--- Entry Start ---\nTitle: {title}\n"""
-            if page_id: context_entry += f"Page ID: {page_id}\n" 
-            if entry_date_str: context_entry += f"Date: {entry_date_str}\n"
-            tags = entry_data.get('Tags') 
-            if tags and isinstance(tags, list): context_entry += f"Tags: {', '.join(tags)}\n"
-            family = entry_data.get('Family')
-            if family and isinstance(family, list): context_entry += f"Family: {', '.join(family)}\n"
-            friends = entry_data.get('Friends')
-            if friends and isinstance(friends, list): context_entry += f"Friends: {', '.join(friends)}\n"
-            context_entry += f"""Content:\n{content}\n--- Entry End ---\n\n"""
-            context_parts.append(context_entry)
-            
-            # Construct URL from page_id if page_id exists
-            constructed_url = None
-            if page_id:
-                page_id_no_hyphens = page_id.replace("-", "")
-                constructed_url = f"https://www.notion.so/{page_id_no_hyphens}"
-            
-            # Append source info if URL exists
-            if constructed_url:
-                sources.append({"title": title, "url": constructed_url})
-            else:
-                # Optionally log if a source is skipped due to missing page_id/url
-                logger.debug(f"Skipping source for entry '{title}' due to missing page_id/URL.")
-
+        if effective_k == 0: # If no candidates, search will fail or return nothing useful
+            logger.warning("FAISS search skipped as effective_k is 0 (no candidates after filtering).")
+            distances, retrieved_indices = (np.array([]), np.array([[]])) # Empty results
         else:
-            logger.warning(f"FAISS index {idx} found in search results but not in index_to_entry mapping.")
-
-    context_string = "".join(context_parts)
-    if not context_string: logger.warning("No context could be retrieved for the search results.")
-
-    # 6. Generate Final Answer using LLM
-    logger.info("Generating final answer using LLM...")
-    # Align System and User prompts with CLI for formatting
-    final_system_prompt = ( 
-        "You are a helpful assistant answering questions based ONLY on the provided journal entries. "
-        "Analyze the metadata (Title, Date, Tags, Family, Friends, etc.) and the Content of each entry carefully. "
-        "**Assumption:** Assume that if a person's name appears in the 'Family' or 'Friends' metadata for an entry, the author saw or was with that person on that entry's date, even if the content doesn't explicitly state it. Use this assumption when answering questions about seeing people or frequency of contact. "
-        "Do not make assumptions or use external knowledge beyond this specific instruction. "
-        "**Safety Guardrail:** Avoid generating responses that contain harmful, inappropriate, or overly sensitive personal information. Specifically, do not output details related to illicit substances or illegal activities, even if mentioned in the context. "
-        "If the answer cannot be found in the provided entries even with the assumption, say so."
-    )
-    # ORIGINAL PROMPT ASKING LLM TO FORMAT IN-TEXT
-    final_user_prompt = f"""Here are the relevant journal entries:
---- START CONTEXT ---
-{context_string if context_string else "No context was retrieved."}
---- END CONTEXT ---
-
-Based *only* on the context provided above, answer the following question comprehensively.
-
-**Instructions for Formatting:**
-- If the answer includes specific dates or references entries, please include:
-  - The relevant date (e.g., `Date: YYYY-MM-DD`).
-  - A markdown link to the most relevant original Notion journal entry formatted as `Journal Entry: [Title of Entry](Notion Link)`.
-  - Construct the Notion Link using the 'Page ID:' metadata like this: `https://www.notion.so/<page_id_without_hyphens>` (e.g., if Page ID is 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', the link is `https://www.notion.so/a1b2c3d4e5f67890abcdef1234567890`). Use the 'Title:' metadata for the link text.
-  - Place these details clearly within or directly following the main answer text.
-
-Question: {user_query}
-Answer:"""
-    logger.debug(f"Final Answer System Prompt: {final_system_prompt}")
-    logger.debug(f"Final Answer User Prompt Start:\nContext Length: {len(context_string)}\nQuery: {user_query}")
-    final_answer = "Error: Default answer generation failure."
-    try:
-        response = await asyncio.to_thread(openai_client.chat.completions.create, model=FINAL_ANSWER_MODEL, messages=[
-                {"role": "system", "content": final_system_prompt}, {"role": "user", "content": final_user_prompt}
-            ], temperature=0.5)
-        final_answer = response.choices[0].message.content
-        logger.info("Successfully generated final answer.")
+            # MODIFICATION: Correctly use SearchParameters with the selector
+            search_parameters_with_selector = faiss.SearchParameters()
+            search_parameters_with_selector.sel = target_faiss_indices_selector # target_faiss_indices_selector is an IDSelectorBatch
+            distances, retrieved_indices = index.search(query_embedding_np, k=effective_k, params=search_parameters_with_selector)
     except Exception as e:
-        logger.error(f"Error during final answer LLM call: {e}", exc_info=True)
-        final_answer = "Error: Failed to generate the final answer due to an LLM issue."
+        logger.error(f"FAISS search failed: {e}", exc_info=True)
+        # --- MODIFICATION START: More specific message on fallback ---
+        answer_on_search_error = "Error during semantic search."
+        if fallback_triggered_due_to_names:
+            answer_on_search_error = "An error occurred while searching the content for the mentioned person(s) after the initial metadata search found no tags."
+        # --- MODIFICATION END ---
+        return {"answer": answer_on_search_error, "sources": []}
+
+    if retrieved_indices.size == 0 or (retrieved_indices.ndim > 1 and retrieved_indices.shape[1] == 0) or (retrieved_indices.ndim == 1 and retrieved_indices[0] == -1):
+        logger.warning("FAISS search returned no results.")
+        # --- MODIFICATION START: More specific message on fallback ---
+        answer = "No relevant entries found matching your query in the specified context."
+        if fallback_triggered_due_to_names:
+            answer = "While entries were found for the period, none of their content seemed to match your query about the named person(s)."
+        # --- MODIFICATION END ---
+        return {"answer": answer, "sources": []}
+
+    # 5. Retrieve Context and Prepare for LLM
+    context_for_llm = []
+    sources_for_response = []
+    # Ensure retrieved_indices are handled correctly, it's a 2D array
+    retrieved_faiss_original_indices = retrieved_indices[0] 
+
+    logger.info(f"Retrieving context for {len(retrieved_faiss_original_indices)} search results...")
+    for i, faiss_idx_val in enumerate(retrieved_faiss_original_indices):
+        faiss_idx = int(faiss_idx_val) # Ensure it's an int
+        if faiss_idx == -1: continue 
+        
+        entry_data = index_to_entry.get(faiss_idx) 
+        if entry_data:
+            content = entry_data.get("content", "")
+            title = entry_data.get("title", "Untitled Entry")
+            url = entry_data.get("url", "") # Get existing URL if any
+            page_id = entry_data.get("page_id") # Get page_id
+
+            # --- MODIFICATION START: Reconstruct URL if missing and page_id exists ---
+            if not url and page_id:
+                page_id_no_hyphens = str(page_id).replace("-", "")
+                url = f"https://www.notion.so/{page_id_no_hyphens}"
+                logger.debug(f"Constructed URL for page_id {page_id}: {url}")
+            # --- MODIFICATION END ---
+
+            entry_date_obj = entry_data.get("entry_date") 
+            entry_date_str = entry_date_obj.isoformat() if entry_date_obj else "Unknown date"
+            
+            context_for_llm.append(f"Document (ID: {faiss_idx}, Title: {title}, Date: {entry_date_str}):\n{content}\n---")
+            # Ensure distances array matches retrieved_indices structure
+            dist_val = float(distances[0][i]) if distances.ndim > 1 and i < distances.shape[1] else 0.0
+            sources_for_response.append({"title": title, "url": url, "id": str(faiss_idx), "date": entry_date_str, "distance": dist_val})
+        else:
+            logger.warning(f"Could not find entry data for FAISS index: {faiss_idx}")
+
+    if not context_for_llm:
+        logger.warning("No context could be retrieved for the LLM, though search found indices.")
+        # --- MODIFICATION START: More specific message on fallback ---
+        answer = "Could not retrieve content for the found entries."
+        if fallback_triggered_due_to_names:
+            answer = "Found some potentially relevant entries for the period, but could not retrieve their content to check for the named person(s)."
+        # --- MODIFICATION END ---
+        return {"answer": answer, "sources": []}
+
+    # 6. Construct Prompt and Call Final LLM
+    context_str = "\n\n".join(context_for_llm)
+    
+    # Simplified string definition using triple-quoted f-strings
+    formatting_instructions = f"""\n\n**Detailed Instructions for Structuring Your Answer and Referencing Sources:**
+
+1.  **Overall Narrative Flow:** Your answer should read like a helpful, reflective summary, as if recalling memories. 
+
+2.  **Introduction (If appropriate):** Begin with a brief introductory sentence or two that generally addresses the user's query before diving into specific examples or themes.
+
+3.  **Thematic Sections (Main Content):**
+    *   Identify key themes, events, or memories from the provided documents relevant to the query.
+    *   For each distinct theme/event, start with a **bolded title** that summarizes it (e.g., `**Hilarious Reactions to Foods:**` or `**Playground Adventures:**`).
+    *   Follow the bolded title with a descriptive paragraph or two elaborating on that theme/event, drawing information from the relevant journal entries.
+
+4.  **Citing Sources within Thematic Sections:**
+    *   When you include specific details or direct recollections from a journal entry within a thematic section, you MUST cite that entry.
+    *   Incorporate the citation naturally: create a markdown hyperlink `[Title of Entry](Notion URL)` within your narrative sentence or immediately after the relevant phrase.
+    *   IMMEDIATELY follow this hyperlink with its corresponding date in parentheses, formatted nicely (e.g., `(January 7, 2025)`). Do NOT include the word "Date:" before this parenthetical date.
+    *   The Notion URL for the hyperlink is constructed using the entry's Page ID (Document ID from context) by removing hyphens: `https://www.notion.so/<page_id_without_hyphens>`.
+
+5.  **Concluding Thought (If appropriate):** End your entire response with a brief concluding sentence or reflection that summarizes the key takeaways or offers a final thought related to the query.
+
+**Example of a Thematic Section with Citation:**
+
+  **First Foods:** Leo's initial encounters with new foods were often amusing. His reactions to trying banana and blackberry, for instance, were particularly funny and endearing ([Leo's Tries Food!](https://www.notion.so/yyyyyyyyy)) (January 7, 2025). He showed a clear preference for the tart and sweet blackberry over the banana.
+
+**Important Reminders:**
+- Maintain a conversational and engaging tone suitable for memory recall.
+- Ensure the narrative flows logically from introduction, through thematic points, to a conclusion.
+- Do NOT use markdown code blocks for any part of this.
+"""
+
+    base_system_message = f"""You are an AI assistant functioning as a 'Second Brain.' Your purpose is to help the user recall and synthesize information from their journal entries. Respond in a natural, reflective, and narrative style. Organize your answers clearly, often using bolded thematic titles to highlight key memories or points, each followed by descriptive details. Cite specific journal entries when you draw information from them, as per the detailed formatting instructions provided.""" # Emphasized persona and style
+
+    final_system_prompt = base_system_message + formatting_instructions
+
+    if fallback_triggered_due_to_names and active_name_filters:
+        names_in_query = list(set(f.get('contains') for f in active_name_filters if f.get('contains')))
+        names_str = " and ".join(names_in_query) if names_in_query else "the person(s) mentioned"
+        
+        # The fallback_intro will be prepended to the base_system_message for the fallback scenario.
+        # The combined message will then have formatting_instructions appended.
+        fallback_intro = f"""The initial search for entries explicitly tagged with metadata for '{names_str}' in the specified period did not yield results. 
+Therefore, the search was broadened to include entries from that period that might mention '{names_str}' in their content. 
+Please CAREFULLY review the following documents. Your primary goal is to find and synthesize information specifically related to '{names_str}' based on the user's query. 
+If you find relevant information about '{names_str}', present it. 
+If, after reviewing the documents, you still cannot find information about '{names_str}' relevant to the query, CLEARLY state that while these entries are from the correct period, they do not seem to contain the requested information about '{names_str}'.\n\n"""
+        final_system_prompt = fallback_intro + base_system_message + formatting_instructions # Ensure formatting_instructions are included here too
+    # --- MODIFICATION END ---
+
+    user_message_for_final_llm = f"User Query: \"{user_query}\"\n\nRelevant Documents:\n{context_str}"
+    
+    logger.info("Sending request to final LLM for answer generation...")
+    # logger.debug(f"Final LLM System Prompt: {final_system_prompt}") 
+
+    try:
+        response = await asyncio.to_thread(
+            openai_client.chat.completions.create,
+            model=FINAL_ANSWER_MODEL,
+            messages=[
+                {"role": "system", "content": final_system_prompt},
+                {"role": "user", "content": user_message_for_final_llm}
+            ],
+            temperature=0.5 
+        )
+        answer = response.choices[0].message.content
+        logger.info("Received answer from final LLM.")
+    except Exception as e:
+        logger.error(f"Error during final LLM call: {e}", exc_info=True)
+        # --- MODIFICATION START: More specific message on fallback ---
+        answer_on_llm_error = "Error generating final answer."
+        if fallback_triggered_due_to_names:
+            answer_on_llm_error = f"An error occurred while trying to synthesize information about the named person(s) from the retrieved content."
+        # --- MODIFICATION END ---
+        return {"answer": answer_on_llm_error, "sources": sources_for_response}
 
     end_time = time.time()
     logger.info(f"RAG process completed in {end_time - start_time:.2f} seconds.")
+    
+    # --- ADDED FOR DEBUGGING --- 
+    logger.info(f"Final sources for response: {json.dumps(sources_for_response, indent=2)}")
+    # --- END DEBUGGING --- 
 
-    # Return original simple structure
-    return {"answer": final_answer, "sources": sources} 
+    return {"answer": answer, "sources": sources_for_response}
+
+# ... (any other functions or main block if this file is runnable) ... 

@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Dict, Any
+from pydantic import BaseModel, HttpUrl
+from typing import List, Dict, Any, Optional
 import os
 import logging # Import logging
 from dotenv import load_dotenv
@@ -63,6 +63,8 @@ class QueryRequest(BaseModel):
 class SourceDocument(BaseModel):
     title: str
     url: str
+    id: Optional[str] = None
+    date: Optional[str] = None
 
 class QueryResponse(BaseModel):
     answer: str
