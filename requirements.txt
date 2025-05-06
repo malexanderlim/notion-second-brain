@@ -1,4 +1,11 @@
-python-dotenv 
+typer[all]
+notion-client
+python-dotenv
+rich
+# Add your preferred LLM client library here, e.g.:
+# openai
+# anthropic
+
 requests 
 openai 
 faiss-cpu 

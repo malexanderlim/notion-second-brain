@@ -136,6 +136,8 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Render source links (title + URL) below the answer.
     - [x] Display a generic error message if the API call fails.
     - [ ] **Persist Query History:** Modify state to store a list of query/response/error entries instead of just the latest one. Update rendering logic to display the history.
+  - [ ] **Future UI Enhancements:**
+    - [ ] **Voice Input:** Add a microphone icon/button to allow users to ask questions via voice. Requires using browser Web Speech API (for speech recognition) or integrating a dedicated speech-to-text service.
   - [ ] **Integration & Testing:**
     - [x] Run backend and frontend dev servers concurrently.
     - [x] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed. (Verified after resolving backend/CLI discrepancies).
