@@ -1,0 +1,12 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+
+# RAG Dependencies (will be needed soon)
+openai
+faiss-cpu
+# langchain # Or specific langchain components if preferred
+anthropic
+
+# CORS
+fastapi-cors 

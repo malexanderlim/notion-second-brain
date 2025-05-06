@@ -1,0 +1,291 @@
+# Notion Second Brain - Phase 1 MVP RAG Implementation
+
+Tracking progress for the initial MVP RAG Demo and subsequent full index build.
+
+## Completed Tasks
+
+- [x] **1.1 Setup Project Structure**
+  - [x] Create basic project scaffolding (`notion_second_brain/`, `tests/`, `docs/`)
+  - [x] Create `requirements.txt`
+  - [x] Create `.gitignore` for Python
+  - [x] Create `.env.example`
+  - [x] Restructure project to match README standard (package `notion_second_brain/`)
+- [x] **1.2 Notion API Integration**
+  - [x] Create `config.py` for loading environment variables (Notion Token, DB ID)
+  - [x] Add `python-dotenv` to `requirements.txt`
+  - [x] Create `notion/api.py` module
+  - [x] Implement `NotionClient` class with base URL, headers, session
+  - [x] Add `requests` to `requirements.txt`
+  - [x] Implement `_request` helper method with error handling
+  - [x] Implement `test_connection` method
+  - [x] Implement `query_database` method with pagination
+  - [x] Implement `retrieve_block_children` method with pagination
+- [x] **1.3 Data Extraction and Processing**
+  - [x] Create `notion/extractors.py` module
+  - [x] Implement `extract_text_from_rich_text_array` helper
+  - [x] Implement `extract_text_from_block` for various block types
+  - [x] Implement `extract_page_content` to combine block texts
+  - [x] Create `processing/filters.py` module
+  - [x] Implement `get_entry_date` helper function
+  - [x] Implement date-based filtering functions (`day`, `week`, `month`, `year`, `range`)
+- [x] **1.4 JSON Export**
+  - [x] Create `storage/json_storage.py` module
+  - [x] Implement `generate_filename` for time periods
+  - [x] Implement `save_entries_to_json` function
+- [x] **3.1 Command Line Interface (Basic)**
+  - [x] Create `cli.py` module in root
+  - [x] Implement argument parsing (`argparse`) for basic options (period, dates, output, test, verbose)
+  - [x] Implement main script logic: initialize client, query pages, retrieve blocks, extract content, filter, save to JSON.
+  - [x] Optimize `cli.py` to use Notion API filters for queries (instead of local filtering)
+  - [x] Transform raw Notion page object to simpler JSON structure before saving
+- [x] **Phase 1 Refinements & Setup:**
+  - [x] Initialize Git repository (`git init`)
+  - [x] Create project virtual environment (e.g., `python3 -m venv venv`)
+  - [x] Retrieve Notion database schema to identify all property types
+  - [x] Add handlers for all used property types in `processing/transformers.py` (Verified existing code handles required types)
+  - [x] Add basic logging configuration (Centralized in `config.py`)
+  - [x] Implement better error handling in `cli.py` and core modules (API rate limit retry added)
+- [x] **Project Setup & Documentation:**
+  - [x] Create `design/` directory for technical design documents
+  - [x] Create `design/MVP_RAG_TDD.md` outlining the MVP RAG plan
+- [x] **Implement Hybrid RAG (Metadata Filtering with Dynamic Values + Semantic Search):**
+  - [x] **Extract Distinct Metadata Values:**
+    - [x] In `cli.py` (`handle_query`), after loading `index_mapping.json`, implement logic to iterate through it.
+    - [x] Extract unique string values for key filterable list/multi-select fields (e.g., `Family`, `Friends`, `Tags`). Store efficiently (e.g., dict of sets).
+    - [x] **Caching:** Store/load these distinct values in `build_index.py` and `cli.py` using `metadata_cache.json`.
+  - [x] **Query Analysis:**
+    - [x] Update `analyze_query_for_filters` prompt to accept and utilize distinct values.
+    - [x] Ensure LLM correctly maps query terms (names, tags) using distinct values.
+    - [x] Ensure LLM correctly extracts date ranges.
+  - [x] **Pre-Filtering:**
+    - [x] In `cli.py` (`handle_query`), use the parsed filters to pre-filter `mapping_data` based on dates and field values.
+    - [x] Handle OR logic correctly for name filters across 'Family'/'Friends'.
+  - [x] **Targeted Semantic Search:**
+    - [x] Use FAISS `IDSelectorBatch` (or similar) to restrict `index.search` to the pre-filtered indices.
+    - [x] Handle the case where pre-filtering yields zero results.
+  - [x] **Final Answer Generation:**
+    - [x] Use the results from the targeted search to retrieve context (full content).
+    - [x] Send context + query to the final LLM (`gpt-4o`).
+    - [x] Refine final prompt to handle specific inferences (e.g., tagged = seen) and formatting (dates, links).
+- [x] Create `TECHNICAL_LEARNINGS.md` summarizing RAG development insights.
+
+## MVP RAG - In Progress Tasks (Midnight Sprint!)
+
+- [x] **Setup & Dependencies:**
+  - [x] Add `openai`, `faiss-cpu` to `requirements.txt`
+  - [x] Add `OPENAI_API_KEY` to `.env.example` (User must add to `.env`)
+- [x] **Offline Indexing (`build_index.py`):**
+  - [x] Create `build_index.py` script skeleton
+  - [x] Load entries from JSON export
+  - [x] Implement OpenAI embedding for entry content
+  - [x] Implement FAISS index creation (`IndexFlatL2`)
+  - [x] Create and save index-to-entry mapping file (`index_mapping.json`)
+  - [x] Save FAISS index (`index.faiss`)
+- [x] **CLI Query Handling (`cli.py`):**
+  - [x] Add `--query` argument to `argparse`
+  - [x] Add logic to `main()` to handle `--query` mode
+  - [x] Load FAISS index and mapping file
+  - [x] Implement OpenAI embedding for user query
+  - [x] Implement FAISS similarity search (top k)
+  - [x] Implement context retrieval from mapping
+  - [x] Implement basic prompt construction
+  - [x] Implement OpenAI chat completion call
+  - [x] Print LLM response to console
+
+## Future Tasks (Post-MVP)
+
+(Based on README Phases/Plan & TDD - refine as needed)
+
+- [ ] **Operationalization & Sync:**
+  - [ ] Finalize strategy for ongoing synchronization (See `design/ROLLOUT_SYNC_PLAN_TDD.md`). Key considerations:
+    - Confirm use of `last_edited_time` for detecting changes.
+    - Determine frequency of sync runs (e.g., daily, weekly, manual trigger).
+    - Design robust error handling for sync failures.
+    - Consider how to handle page deletions (remove from index?).
+  - [ ] Implement the chosen synchronization solution (likely involving scheduled runs of `cli.py --export-month` and `build_index.py`).
+
+- [x] **Web Interface (Hyper-MVP):**
+  - [ ] **Backend Setup:**
+    - [x] Choose & setup backend framework (Flask/FastAPI) in `backend/` directory.
+    - [x] Define `/api/query` POST endpoint structure.
+    - [x] Refactor RAG query logic from `cli.py` into a reusable function in `backend/rag_query.py` (or similar).
+    - [x] Implement index/mapping loading in the backend function.
+    - [x] Implement query embedding, FAISS search, context retrieval logic in the backend function.
+    - [x] Implement LLM call and response parsing in the backend function.
+    - [x] Implement extraction of source document titles and URLs.
+    - [x] Connect the `/api/query` endpoint to the refactored RAG logic.
+    - [x] Add basic error handling (try-except blocks) to the endpoint.
+    - [x] Create `backend/requirements.txt` (including Flask/FastAPI, openai, faiss-cpu, etc.).
+    - [x] Add CORS middleware to the backend application.
+    - [x] **Fix:** Ensure `sources` list in `rag_query.py` is correctly populated with `{'title': title, 'url': constructed_url}`.
+  - [ ] **Frontend Setup:**
+    - [x] Create `frontend/` directory.
+    - [x] Initialize React + Vite + TS project (`npm create vite@latest frontend -- --template react-ts`).
+    - [x] Install and configure Tailwind CSS.
+    - [x] Initialize `shadcn/ui` (`npx shadcn@latest init`).
+    - [x] Install necessary `shadcn/ui` components (e.g., `button`, `input`, `card`, `skeleton`).
+    - [x] Install `axios`.
+  - [ ] **Frontend UI Implementation:**
+    - [x] Create main `App.tsx` component structure.
+    - [x] Add `Input` for query and `Button` for submission.
+    - [x] Add `Card` for displaying the answer.
+    - [x] Implement `useState` hooks for query, loading, answer, sources, error.
+    - [x] Implement the `handleSubmit` function to call the backend API.
+    - [x] Implement loading state display (e.g., show `Skeleton`).
+    - [x] Render the answer text within the `Card`.
+    - [x] Render source links (title + URL) below the answer.
+    - [x] Display a generic error message if the API call fails.
+    - [ ] **Persist Query History:** Modify state to store a list of query/response/error entries instead of just the latest one. Update rendering logic to display the history.
+  - [ ] **Future UI Enhancements:**
+    - [ ] **Voice Input:** Add a microphone icon/button to allow users to ask questions via voice. Requires using browser Web Speech API (for speech recognition) or integrating a dedicated speech-to-text service.
+    - [x] **Improve RAG Output Display (`frontend/src/App.tsx`):**
+      - [x] **Answer Block Styling:**
+        - [x] Confirm `react-markdown` (or equivalent) correctly renders LLM-provided markdown (bolding, emphasis).
+        - [x] Apply Tailwind CSS `prose` classes (or similar custom styling) to the answer container for enhanced typography, paragraph spacing, and readability.
+        - [x] Style inline citations (e.g., `(Date: YYYY-MM-DD, Journal Entry: [Title](URL))`) for better visual distinction (e.g., slightly smaller font, subtle background, clear link styling).
+      - [x] **"Sources Used" List Enhancements:**
+        - [x] Implement client-side sorting of the `sources` array by date in ascending order before rendering.
+        - [x] Create and use a date formatting function (e.g., using `toLocaleDateString` or a library like `date-fns`) to display dates human-readably (e.g., "January 21, 2025").
+        - [x] Restyle each source item for clarity and better visual separation (e.g., using card-like elements or styled list items via Tailwind CSS). Each item should clearly display:
+          - [x] The hyperlinked `source.title`.
+          - [x] The formatted `source.date`.
+        - [x] Ensure consistent and clear link styling for source titles.
+        - [x] Consider subtle iconography (e.g., calendar icon for date) if it enhances UX without clutter.
+      - [x] **Overall Readability:**
+        - [x] Review font choices, line heights, and color contrasts for optimal readability in both light and dark modes.
+
+- [x] **Further RAG Enhancements:**
+  - [ ] **Model Exploration:**
+    - [ ] Evaluate alternative/newer embedding models (e.g., OpenAI text-embedding-3-small/large, local models like Sentence Transformers) for potential cost/performance/accuracy benefits.
+    - [ ] Test alternative final answer generation models (e.g., other OpenAI models, Anthropic Claude models via API) for cost/accuracy trade-offs.
+  - [x] **Improve Name Handling in Queries (Fallback and Prompting):**
+    - [x] **Modify Pre-filtering Logic (`backend/rag_query.py`):**
+      - [x] After applying name-based metadata filters (e.g., 'Family', 'Friends'), check if candidate count is zero *and* if name filters were active.
+      - [x] If so, revert to the candidate list that existed *before* name filtering (i.e., only date and other non-name metadata filters applied). Log this fallback action.
+      - [x] If this pre-name-filter candidate list is also empty, then report "no results."
+      - [x] Otherwise, proceed to semantic search with this broader candidate list.
+    - [x] **Enhance Final Answer Generation Prompt (`backend/rag_query.py`):**
+      - [x] If the name pre-filtering fallback was triggered, modify the prompt to the final LLM.
+      - [x] Explicitly instruct the LLM to:
+        - [x] Carefully scan the provided context documents for mentions of the name(s) from the original query.
+        - [x] Prioritize synthesizing an answer that directly addresses the query by focusing on information related to the named individual(s) found *within the content*.
+        - [x] If the name(s) are not found in the retrieved content despite the fallback, the LLM should state that clearly.
+  - [x] **Implement Tag-Based Filtering Fallback (`backend/rag_query.py`):**
+    - [x] **Goal:** Enhance query robustness when specific metadata tags (e.g., from the 'Tags' field) are not present in entries that might otherwise be relevant based on content. This aims to prevent overly narrow results due to incomplete tagging, similar to how the existing name-based fallback works.
+    - [x] **Context:** The current system first analyzes the query for date ranges and metadata filters (including tags). If a tag filter (e.g., `{"field": "Tags", "contains": "restaurant"}`) is identified, it's applied after the date filter. If this results in zero candidates, the system currently reports no results for those tags (see `SYSTEM_OVERVIEW_AND_QUERY_LOGIC.md` for full query flow).
+    - [x] **Logic to Implement (in `perform_rag_query`):**
+      - [x] Identify when tag-specific filters (e.g., filters on the 'Tags' property, or other configurable multi-select/select fields) are active from the `filter_analysis` output.
+      - [x] Before applying these tag-specific filters (but after date and any other non-tag, non-name filters), store a copy of the current `current_candidates` list (let's call it `candidates_before_tag_filter`).
+      - [x] Apply the tag-specific filters to `current_candidates`.
+      - [x] If the number of `current_candidates` becomes zero *and* tag-specific filters were active, trigger the fallback: 
+        - Set `current_candidates = candidates_before_tag_filter`.
+        - Set a flag, e.g., `fallback_triggered_due_to_tags = True`.
+        - Log this fallback action clearly, indicating which tag filters were relaxed.
+      - [x] Ensure this logic interacts correctly with the existing name filter fallback (e.g., consider the order of fallbacks or if they can be combined).
+    - [x] **Semantic Search:** Proceed to semantic search using the (potentially reverted) `current_candidates`.
+    - [x] **Prompt Engineering (Final Answer Generation):** 
+      - [x] If `fallback_triggered_due_to_tags` is true, modify the `final_system_prompt`.
+      - [x] Inform the LLM that initial filtering for specific tags didn't yield exhaustive results, so the search was broadened. Instruct it to carefully look for concepts related to the original query (including the initially requested tags if they were part of the user's natural language query) within the provided content.
+      - [x] Example: "The initial search for entries explicitly tagged with 'X' did not return results. The search was broadened. Please review for information related to the query, paying attention to mentions of 'X' within the content."
+    - [x] **Testing:** Test with queries where relevant entries exist but lack explicit tags, and also where entries have the tags.
+  - [ ] **Chunking Strategy:** Investigate alternatives to embedding entire entries. Explore fixed-size, sentence-based, or content-aware chunking to potentially improve retrieval specificity and reduce context size.
+  - [ ] **Retrieval Tuning:**
+    - [ ] Experiment with different `TOP_K` values and analyze the cost/accuracy trade-off more formally.
+    - [ ] Consider dynamic `TOP_K` based on query type or initial filter results.
+    - [ ] Explore re-ranking retrieved results before sending to LLM (e.g., using a cross-encoder).
+  - [ ] **Prompt Engineering:**
+    - [ ] Further refine system/user prompts for query analysis and final answer generation.
+    - [ ] Experiment with different prompt structures (e.g., few-shot examples).
+    - [ ] Improve handling of the "tagged = seen" assumption (e.g., injecting text notes into context, or implementing two-stage logic for counting vs. content queries).
+      - [x] Implemented two-stage logic (metadata count first, then exemplars) for quantitative person and tag queries.
+  - [ ] **Query Processing:**
+    - [ ] Implement query decomposition for complex questions involving multiple parts or constraints.
+    - [ ] Enhance query safety check (e.g., more nuanced topic detection, stricter default behavior on error).
+  - [ ] **Vector DB:** Evaluate migrating from local FAISS to a managed vector database (Pinecone, Weaviate, ChromaDB, etc.) for scalability and easier management, especially if syncing becomes frequent.
+  - [ ] **Cost Management:** Implement token usage tracking and estimated cost calculation per query, potentially displaying it in the UI.
+  - [ ] **Configuration:** Move more hardcoded values (models, paths, `TOP_K`, prompts) to a configuration file or environment variables.
+
+- [ ] **New Feature: Model Selection & Cost Estimation**
+  - [x] **Phase 1: Backend - Merge Original RAG Logic & Finalize Multi-Provider Support**
+    - [x] **CRITICAL: Task 1.0 (Backend - `rag_query.py`): Full RAG Pipeline Integration.**
+      - [x] Ensure RAG pipeline logic (metadata filtering, FAISS search, context retrieval, prompt assembly) integrates with model selection, token counting, and cost calculation.
+      - [x] Ensure all early `return` statements within `perform_rag_query` are updated to return a dictionary matching the `QueryResponse` model in `backend/main.py`.
+    - [x] Task 1.1 (Backend - `rag_query.py`): Define `MODEL_CONFIG` dictionary for OpenAI & Anthropic (include `provider`, `api_id`, `cost_per_input_token`, `cost_per_output_token`, `max_output_tokens`).
+    - [x] Task 1.1.1 (Backend - `rag_query.py`): Modify `perform_rag_query` signature to accept `model_name`. Update `analyze_query_for_filters`, `get_embedding`, and final LLM call to use `api_id` from selected model in `MODEL_CONFIG`.
+    - [x] Task 1.2 (Backend - `rag_query.py`): Implement OpenAI & Anthropic Token Counting (capture `prompt_tokens`, `completion_tokens` from API responses for all LLM calls within `rag_query.py`).
+    - [x] Task 1.3 (Backend - `rag_query.py`): Implement OpenAI & Anthropic Cost Calculation (using token counts and `MODEL_CONFIG` pricing for all stages in `rag_query.py`).
+    - [x] Task 1.4 (Backend - `rag_query.py` & `main.py`): Update Return Values & Response Model.
+        - [x] `main.py`: `QueryResponse` model reflects all new fields (model_used, tokens, cost etc.).
+        - [x] `rag_query.py`: Ensure `perform_rag_query` returns all required fields for `QueryResponse` (answer, sources, model_used, model_api_id_used, model_provider_used, input_tokens, output_tokens, estimated_cost_usd).
+  - [ ] **Phase 2: Frontend - Display Full Model Info & Costs**
+    - [x] Task 2.1 (Frontend - `App.tsx`): Update `QueryResponse` Interface & State (add all new fields from backend, add state variables, update `handleSubmit` and `handleClear`).
+    - [x] Task 2.2 (Frontend - `App.tsx`): Enhance UI to Display New Info (Model Name, Provider, Tokens, Cost).
+  - [x] **Phase 3: Backend - Anthropic Full Integration**
+    - [x] Task 3.1 (Backend - Environment & SDK): Verify/Add Anthropic SDK to `backend/requirements.txt`.
+    - [x] Task 3.2 (Backend - `main.py`/`rag_query.py`): Implement `initialize_anthropic_client` in `rag_query.py` and ensure `main.py` calls it.
+    - [x] Task 3.3 (Backend - `rag_query.py`): Update `MODEL_CONFIG` to include full details for Anthropic models.
+    - [x] Task 3.4 (Backend - `rag_query.py`): Implement LLM Calls for Anthropic provider in `perform_rag_query` (actual API call logic for final answer generation).
+    - [x] Task 3.5 (Backend - `rag_query.py`): Ensure cost calculation (Task 1.3) works for Anthropic models (for final answer generation).
+  - [ ] **Phase 4: Testing & Verification**
+    - [ ] Task 4.1 (Frontend - `App.tsx` & Backend): Verify full end-to-end functionality for both OpenAI and Anthropic models, including correct RAG answers, model info display, token counts, and cost estimation.
+      - [x] Initial testing performed for OpenAI (gpt-4o, gpt-4o-mini) and Anthropic (Claude 3.5 Haiku).
+      - [x] Backend `MODEL_CONFIG` updated to include correct API IDs and pricing for tested models.
+      - [x] Identified and fixed issues related to model key mismatches between frontend selection and backend configuration.
+      - [ ] Further testing across a wider range of queries and edge cases recommended.
+  - [ ] **Documentation & Design:**
+    - [x] Create `design/MODEL_SELECTION_COST_TDD.md` outlining the design for this feature.
+
+- [ ] **Testing & Reliability:**
+  - [ ] Implement comprehensive unit tests for core modules (API client, extractors, transformers, storage, RAG components).
+  - [ ] Implement integration tests for `cli.py` export and query workflows.
+  - [ ] Add specific tests for edge cases (empty results, API errors, invalid inputs, context limits).
+  - [ ] Improve error handling and provide more informative user messages (e.g., when pre-filtering yields no results, when safety check fails, when LLM refuses to answer).
+
+- [ ] **Data Handling:**
+  - [ ] Re-evaluate handling of entries with empty content during indexing (currently skipped).
+  - [ ] Enhance `extract_text_from_block` for more block types if needed based on journal usage (e.g., toggles, tables).
+
+## Deprecated Tasks
+
+- [-] **Debug RAG Metadata Query Accuracy:** (Superseded by Hybrid RAG approach)
+  - [-] Verify embedded text structure: Add debug log to `build_index.py` for `combined_text_for_embedding`.
+  - [-] (Conditional) Re-run `build_index.py --force-rebuild` if logged structure is incorrect.
+  - [-] Increase retrieval count: Modify `cli.py` to set `TOP_K = 30`.
+  - [-] Refine LLM guidance: Modify system prompt in `cli.py`.
+  - [-] Test metadata-specific queries (e.g., involving names, tags, dates).
+
+## Implementation Plan
+
+**Current Focus:** Execute the "MVP RAG - In Progress Tasks" list ASAP for demo.
+
+### Relevant Files
+
+- `README.md` - Project overview and plan ✅
+- `.gitignore` - Specifies intentionally untracked files ✅
+- `requirements.txt` - Project dependencies (`python-dotenv`, `requests`) ⏳ (Needs update)
+- `.env.example` - Example environment variable file ⏳ (Needs update)
+- `cli.py` - Command-line interface script ⏳ (Needs RAG logic)
+- `notion_second_brain/__init__.py` - Package marker ✅
+- `notion_second_brain/config.py` - Handles loading environment variables & logging ✅
+- `notion_second_brain/notion/__init__.py` - Notion sub-package marker ✅
+- `notion_second_brain/notion/api.py` - Notion API client ✅
+- `notion_second_brain/notion/extractors.py` - Extracts text from Notion blocks ✅
+- `notion_second_brain/processing/__init__.py` - Processing sub-package marker ✅
+- `notion_second_brain/processing/filters.py` - Filters entries by date ✅
+- `notion_second_brain/storage/__init__.py` - Storage sub-package marker ✅
+- `notion_second_brain/storage/json_storage.py` - Saves entries to JSON files ✅
+- `.cursor/rules/task-list.mdc` - Cursor rule for task management ✅
+- `notion_second_brain/processing/transformers.py` - Transforms raw Notion data to simpler format ✅
+- `design/MVP_RAG_TDD.md` - Technical design for RAG MVP ✅
+- `build_index.py` - (New) Script to create FAISS index ⏳ (Needs creation)
+- `index.faiss` - (Generated) FAISS index file ⏳
+- `index_mapping.json` - (Generated) Index mapping file ⏳
+- `metadata_cache.json` - (Generated) Cache for distinct metadata values ✅
+- `TECHNICAL_LEARNINGS.md` - Summary of RAG development insights ✅
+- `design/WEB_UI_TDD.md` - Technical design for Web UI MVP ✅
+
+(Future files)
+- `tests/` - Directory for test code
+- `docs/` - Directory for documentation
+- `backend/` - Directory for backend API server code ✅
+  - `backend/main.py`
