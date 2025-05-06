@@ -8,83 +8,15 @@ import asyncio
 import numpy as np
 
 from openai import OpenAI, RateLimitError, APIError
-try:
-    from anthropic import Anthropic, APIStatusError, APIConnectionError
-except ImportError:
-    Anthropic = None 
-    APIStatusError = None
-    APIConnectionError = None
 
 # --- Configuration ---
 INDEX_PATH = "index.faiss"
 MAPPING_PATH = "index_mapping.json"
 METADATA_CACHE_PATH = "metadata_cache.json"
 DATABASE_SCHEMA_PATH = "schema.json" # Corrected schema path
-OPENAI_EMBEDDING_MODEL_ID = "text-embedding-ada-002" # Used for initial embedding
-DEFAULT_QUERY_ANALYSIS_MODEL_KEY = "gpt-4o" # User-facing name for query analysis
-DEFAULT_FINAL_ANSWER_MODEL_KEY = "gpt-4o-mini" # Default to gpt-4o-mini for cost-effectiveness
-
-MODEL_CONFIG = {
-    "gpt-4o": {
-        "api_id": "gpt-4o",
-        "provider": "openai",
-        "cost_per_input_token": 5.00 / 1_000_000,  # $5.00 / 1M tokens
-        "cost_per_output_token": 15.00 / 1_000_000, # $15.00 / 1M tokens
-        "max_output_tokens": 4096, 
-    },
-    "gpt-4o-mini": { 
-        "api_id": "gpt-4o-mini",
-        "provider": "openai",
-        "cost_per_input_token": 0.15 / 1_000_000, # $0.15 / 1M tokens
-        "cost_per_output_token": 0.60 / 1_000_000,  # $0.60 / 1M tokens
-        "max_output_tokens": 16384, 
-    },
-    "text-embedding-ada-002": { 
-        "api_id": "text-embedding-ada-002",
-        "provider": "openai",
-        "cost_per_input_token": 0.10 / 1_000_000, # $0.10 / 1M tokens (OpenAI pricing page)
-        "cost_per_output_token": 0, 
-        "max_output_tokens": 0, 
-    },
-    "claude-3-opus-20240229": { 
-        "api_id": "claude-3-opus-20240229",
-        "provider": "anthropic",
-        "cost_per_input_token": 15.00 / 1_000_000, 
-        "cost_per_output_token": 75.00 / 1_000_000, 
-        "max_output_tokens": 4096, 
-    },
-    "claude-3-sonnet-20240229": { 
-        "api_id": "claude-3-sonnet-20240229",
-        "provider": "anthropic",
-        "cost_per_input_token": 3.00 / 1_000_000, 
-        "cost_per_output_token": 15.00 / 1_000_000,
-        "max_output_tokens": 4096,
-    },
-     "claude-3-haiku-20240307": { 
-        "api_id": "claude-3-haiku-20240307",
-        "provider": "anthropic",
-        "cost_per_input_token": 0.25 / 1_000_000,
-        "cost_per_output_token": 1.25 / 1_000_000,
-        "max_output_tokens": 4096, 
-    },
-    "claude-3-5-haiku-20241022": { # Added based on user provided link and screenshot
-        "api_id": "claude-3-5-haiku-20241022",
-        "provider": "anthropic",
-        "cost_per_input_token": 0.80 / 1_000_000, # $0.80 / 1M input tokens
-        "cost_per_output_token": 4.00 / 1_000_000,  # $4.00 / 1M output tokens
-        "max_output_tokens": 8192, # Max output for Claude 3.5 Haiku
-    },
-    # Add other models here as needed, e.g., Claude 3.5 Sonnet when UI supports it
-    # "claude-3-5-sonnet-20240620": {
-    #     "api_id": "claude-3-5-sonnet-20240620",
-    #     "provider": "anthropic",
-    #     "cost_per_input_token": 3.00 / 1_000_000,
-    #     "cost_per_output_token": 15.00 / 1_000_000,
-    #     "max_output_tokens": 8192,
-    # },
-}
-
-# TOP_K, MAX_EMBEDDING_RETRIES, EMBEDDING_RETRY_DELAY remain the same
+OPENAI_EMBEDDING_MODEL = "text-embedding-ada-002"
+FINAL_ANSWER_MODEL = "gpt-4o"
+QUERY_ANALYSIS_MODEL = "gpt-4o"
 TOP_K = 15
 MAX_EMBEDDING_RETRIES = 3
 EMBEDDING_RETRY_DELAY = 5
@@ -95,7 +27,6 @@ if not logger.handlers:
 
 # --- Globals (Load once) ---
 openai_client = None
-anthropic_client = None # Global for Anthropic client
 index = None
 mapping_data_list: list[dict] | None = None # Expecting list of entry dicts
 index_to_entry: dict[int, dict] | None = None # Map FAISS index to entry dict
@@ -213,129 +144,34 @@ def initialize_openai_client(api_key: str | None):
         logger.error(f"Failed to initialize OpenAI client: {e}", exc_info=True)
         raise
 
-def initialize_anthropic_client(api_key: str | None):
-    """Initializes the Anthropic client using the provided API key."""
-    global anthropic_client
-    if not Anthropic: # Check if Anthropic SDK was imported
-        logger.warning("Anthropic SDK not installed. Anthropic models will be unavailable.")
-        anthropic_client = None
-        return
-    if not api_key:
-        logger.warning("Anthropic API key not provided. Anthropic models will be unavailable.")
-        anthropic_client = None
-        return
-    try:
-        anthropic_client = Anthropic(api_key=api_key)
-        logger.info("Anthropic client initialized.")
-    except Exception as e:
-        logger.error(f"Failed to initialize Anthropic client: {e}", exc_info=True)
-        anthropic_client = None # Ensure client is None if initialization fails
-        # Do not raise here, allow app to start, but Anthropic features will be disabled
-
 # --- Helper Functions ---
-async def get_embedding(text: str, embedding_model_key: str = OPENAI_EMBEDDING_MODEL_ID) -> dict:
-    """Generates an embedding for the given text using the specified model key.
-    Returns a dictionary containing the embedding vector, input tokens, and any error.
-    """
-    embedding_response = {
-        "embedding": None,
-        "input_tokens": 0,
-        "error": None
-    }
-
-    selected_embedding_config = MODEL_CONFIG.get(embedding_model_key)
-    if not selected_embedding_config:
-        logger.error(f"Embedding model configuration not found for key: {embedding_model_key}")
-        embedding_response["error"] = f"Config for embedding model {embedding_model_key} not found."
-        return embedding_response
-
-    if selected_embedding_config["provider"] != "openai":
-        # Embeddings from other providers would need specific client handling here
-        logger.error(f"Embedding generation currently only supports OpenAI models. Requested: {embedding_model_key}")
-        embedding_response["error"] = "Embeddings only support OpenAI currently."
-        return embedding_response
-
-    if not openai_client:
-        logger.error("OpenAI client not initialized for embeddings.")
-        embedding_response["error"] = "OpenAI client not initialized for embeddings."
-        return embedding_response
-
+# (get_embedding remains the same)
+async def get_embedding(text: str, retries: int = MAX_EMBEDDING_RETRIES) -> list[float] | None:
+    if not openai_client: logger.error("OpenAI client not initialized."); return None
     attempt = 0
-    while attempt < MAX_EMBEDDING_RETRIES:
+    while attempt < retries:
         try:
-            api_response = await asyncio.to_thread(
-                openai_client.embeddings.create, 
-                input=text, 
-                model=selected_embedding_config['api_id']
-            )
-            if api_response.data and len(api_response.data) > 0 and api_response.data[0].embedding:
-                embedding_response["embedding"] = api_response.data[0].embedding
-                if api_response.usage:
-                    embedding_response["input_tokens"] = api_response.usage.prompt_tokens
-                    logger.info(f"OpenAI Embedding Usage ({selected_embedding_config['api_id']}): Input={api_response.usage.prompt_tokens}")
+            response = await asyncio.to_thread(openai_client.embeddings.create, input=text, model=OPENAI_EMBEDDING_MODEL)
+            if response.data and len(response.data) > 0 and response.data[0].embedding:
                 logger.debug(f"Successfully obtained embedding for text snippet: '{text[:50]}...'")
-                return embedding_response
-            else: 
-                logger.error(f"Unexpected embedding response structure: {api_response}")
-                embedding_response["error"] = "Unexpected embedding response structure."
-                return embedding_response # Exit if structure is wrong
+                return response.data[0].embedding
+            else: logger.error(f"Unexpected embedding response structure: {response}"); return None
         except RateLimitError as e:
-            attempt += 1; 
-            logger.warning(f"Rate limit hit for embeddings (attempt {attempt}/{MAX_EMBEDDING_RETRIES}). Retrying in {EMBEDDING_RETRY_DELAY}s... Error: {e}")
-            if attempt >= MAX_EMBEDDING_RETRIES: 
-                embedding_response["error"] = "Max retries reached for embedding due to rate limiting."
-                logger.error(embedding_response["error"])
-                return embedding_response
+            attempt += 1; logger.warning(f"Rate limit hit (attempt {attempt}/{retries}). Retrying in {EMBEDDING_RETRY_DELAY}s... Error: {e}")
+            if attempt >= retries: logger.error(f"Max retries reached for embedding due to rate limiting."); return None
             await asyncio.sleep(EMBEDDING_RETRY_DELAY)
         except APIError as e:
-            attempt += 1; 
-            logger.warning(f"API error for embeddings (attempt {attempt}/{MAX_EMBEDDING_RETRIES}). Retrying in {EMBEDDING_RETRY_DELAY}s... Error: {e}")
-            if attempt >= MAX_EMBEDDING_RETRIES: 
-                embedding_response["error"] = "Max retries reached for embedding due to API error."
-                logger.error(embedding_response["error"])
-                return embedding_response
+            attempt += 1; logger.warning(f"API error (attempt {attempt}/{retries}). Retrying in {EMBEDDING_RETRY_DELAY}s... Error: {e}")
+            if attempt >= retries: logger.error(f"Max retries reached for embedding due to API error."); return None
             await asyncio.sleep(EMBEDDING_RETRY_DELAY)
-        except Exception as e: 
-            logger.error(f"Unexpected error getting embedding: {e}", exc_info=True)
-            embedding_response["error"] = f"Unexpected error getting embedding: {str(e)}"
-            return embedding_response # Exit on unexpected error
-    
-    # Should be unreachable if logic is correct, but as a fallback:
-    if not embedding_response["error"]:
-        embedding_response["error"] = "Failed to get embedding after all retries without specific error."
-    return embedding_response
+        except Exception as e: logger.error(f"Unexpected error getting embedding: {e}", exc_info=True); return None
+    return None
 
-async def analyze_query_for_filters(query: str, query_analysis_model_key: str) -> dict | None:
-    """Analyzes query to extract structured filters using the specified model key."""
-    
-    analysis_response_data = {
-        "filters": None,
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "error": None
-    }
-
-    selected_qa_config = MODEL_CONFIG.get(query_analysis_model_key)
-    if not selected_qa_config:
-        logger.error(f"Query analysis model configuration not found for key: {query_analysis_model_key}")
-        analysis_response_data["error"] = f"Config for {query_analysis_model_key} not found."
-        return analysis_response_data
-
-    if selected_qa_config["provider"] != "openai":
-        logger.error(f"Query analysis currently only supports OpenAI models. Requested: {query_analysis_model_key} (provider: {selected_qa_config['provider']})")
-        analysis_response_data["error"] = "Query analysis only supports OpenAI."
-        return analysis_response_data # Or handle other providers if QA is extended
-
-    if not openai_client:
-        logger.error("OpenAI client not initialized for query analysis.")
-        analysis_response_data["error"] = "OpenAI client not initialized."
-        return analysis_response_data
-
-    if not schema_properties: 
-        logger.warning("Database schema not loaded. Query analysis will proceed without schema context.")
-        current_schema = {}
-    else: 
-        current_schema = schema_properties
+async def analyze_query_for_filters(query: str) -> dict | None:
+    """Analyzes query to extract structured filters."""
+    if not openai_client: logger.error("OpenAI client not initialized."); return None
+    if not schema_properties: logger.warning("Database schema not loaded. Query analysis will proceed without schema context."); current_schema = {}
+    else: current_schema = schema_properties
     
     current_date_str = date.today().isoformat()
 
@@ -391,126 +227,36 @@ Analyze the query based ONLY on the schema (if provided), known values (if provi
     logger.debug(f"Query Analysis System Prompt: {system_prompt}")
     logger.debug(f"Query Analysis User Prompt:\n{user_prompt}")
     try:
-        response = await asyncio.to_thread(
-            openai_client.chat.completions.create, 
-            model=selected_qa_config['api_id'], # Use API ID from config
-            messages=[
+        response = await asyncio.to_thread(openai_client.chat.completions.create, model=QUERY_ANALYSIS_MODEL, messages=[
                 {"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}
-            ], 
-            temperature=0.1, 
-            response_format={ "type": "json_object" }
-        )
-        analysis_result_content = response.choices[0].message.content
-        if response.usage:
-            analysis_response_data["input_tokens"] = response.usage.prompt_tokens
-            analysis_response_data["output_tokens"] = response.usage.completion_tokens
-            logger.info(f"OpenAI Query Analysis Usage ({selected_qa_config['api_id']}): Input={response.usage.prompt_tokens}, Output={response.usage.completion_tokens}")
-        
-        logger.info("Received query analysis result from LLM."); logger.debug(f"Raw analysis result: {analysis_result_content}")
-        filter_data = json.loads(analysis_result_content)
-        if not isinstance(filter_data, dict): 
-            raise ValueError("Analysis result is not a dictionary.")
+            ], temperature=0.1, response_format={ "type": "json_object" })
+        analysis_result = response.choices[0].message.content
+        logger.info("Received query analysis result from LLM."); logger.debug(f"Raw analysis result: {analysis_result}")
+        filter_data = json.loads(analysis_result)
+        if not isinstance(filter_data, dict): raise ValueError("Analysis result is not a dictionary.")
         if 'date_range' in filter_data and (not isinstance(filter_data['date_range'], dict) or 'start' not in filter_data['date_range'] or 'end' not in filter_data['date_range']):
              logger.warning(f"Invalid 'date_range' format: {filter_data.get('date_range')}"); filter_data.pop('date_range', None)
         if 'filters' in filter_data and not isinstance(filter_data['filters'], list):
              logger.warning(f"Invalid 'filters' format: {filter_data.get('filters')}"); filter_data.pop('filters', None)
-        
-        analysis_response_data["filters"] = filter_data
-        logger.info(f"Parsed filter data: {json.dumps(filter_data)}")
-        return analysis_response_data
-    except json.JSONDecodeError as e: 
-        logger.error(f"Failed to parse JSON from query analysis: {e}"); logger.error(f"Raw response: {analysis_result_content if 'analysis_result_content' in locals() else 'N/A'}")
-        analysis_response_data["error"] = "Failed to parse JSON from query analysis."
-        return analysis_response_data
-    except Exception as e: 
-        logger.error(f"Error during query analysis LLM call ({selected_qa_config['api_id']}): {e}", exc_info=True)
-        analysis_response_data["error"] = f"LLM call error: {str(e)}"
-        return analysis_response_data
+        logger.info(f"Parsed filter data: {json.dumps(filter_data)}"); return filter_data
+    except json.JSONDecodeError as e: logger.error(f"Failed to parse JSON from query analysis: {e}"); logger.error(f"Raw response: {analysis_result}"); return None
+    except Exception as e: logger.error(f"Error during query analysis LLM call: {e}", exc_info=True); return None
 
 # --- Main RAG Query Function ---
 
-async def perform_rag_query(user_query: str, model_name: str | None = None) -> dict:
+async def perform_rag_query(user_query: str) -> dict:
     """Performs the full RAG process assuming mapping data is a list."""
-    
-    # --- Initialize response structure with defaults ---
-    response_data = {
-        "answer": "Error: RAG process did not complete.",
-        "sources": [],
-        "model_used": model_name if model_name else DEFAULT_FINAL_ANSWER_MODEL_KEY,
-        "model_api_id_used": None,
-        "model_provider_used": None,
-        "input_tokens": 0, # Initialize to 0
-        "output_tokens": 0, # Initialize to 0
-        "estimated_cost_usd": 0.0
-    }
-
-    # --- Determine model for final answer ---
-    final_answer_model_key = model_name if model_name and model_name in MODEL_CONFIG else DEFAULT_FINAL_ANSWER_MODEL_KEY
-    selected_model_config = MODEL_CONFIG.get(final_answer_model_key)
-
-    # This log will help confirm which model key is being resolved
-    logger.info(f"API request for model_name: '{model_name}'. Resolved to final_answer_model_key: '{final_answer_model_key}'")
-
-    if not selected_model_config:
-        logger.error(f"Model configuration not found for key: {final_answer_model_key}. Cannot proceed.")
-        response_data["answer"] = f"Error: Model configuration for '{final_answer_model_key}' not found."
-        return response_data
-        
-    response_data["model_used"] = final_answer_model_key # The user-facing name
-    response_data["model_api_id_used"] = selected_model_config["api_id"]
-    response_data["model_provider_used"] = selected_model_config["provider"]
-
-    # --- Check client initialization based on provider ---
-    active_client = None
-    if selected_model_config["provider"] == "openai":
-        active_client = openai_client
-    elif selected_model_config["provider"] == "anthropic":
-        active_client = anthropic_client
-    # Add other providers here
-
-    if not active_client:
-        error_msg = f"LLM client for provider '{selected_model_config['provider']}' (model: {final_answer_model_key}) is not initialized."
-        logger.error(error_msg)
-        response_data["answer"] = error_msg
-        return response_data
-
-    if not all([index, index_to_entry, mapping_data_list]):
-         logger.error("RAG system core components (index, index->entry mapping, mapping_data_list) not fully initialized.")
-         response_data["answer"] = "Error: RAG system not initialized."
-         return response_data # Use the initialized structure
+    if not all([openai_client, index, index_to_entry, mapping_data_list]):
+         logger.error("RAG system core components (client, index, index->entry mapping, mapping_data_list) not fully initialized.")
+         return {"answer": "Error: RAG system not initialized.", "sources": []}
 
     start_time = time.time()
-    logger.info(f"Starting RAG process for query: '{user_query}' using model: {final_answer_model_key} (API ID: {selected_model_config['api_id']})")
+    logger.info(f"Starting RAG process for query: '{user_query}'")
 
-    # Initialize token counters for this query
-    total_input_tokens = 0
-    total_output_tokens = 0
-
-    # --- Query Analysis ---
-    query_analysis_model_key_to_use = DEFAULT_QUERY_ANALYSIS_MODEL_KEY # Could be made configurable later
-    # For query analysis, we might want to stick to a more powerful model or make it independently selectable.
-    # If we used gpt-4o-mini for analysis, its capabilities for that specific task might be different.
-    # The DEFAULT_QUERY_ANALYSIS_MODEL_KEY is still gpt-4o.
-    
-    analysis_input_tokens = 0
-    analysis_output_tokens = 0
-    filter_analysis = {}
-
-    # Call analyze_query_for_filters with the chosen model key
-    analysis_result = await analyze_query_for_filters(user_query, query_analysis_model_key_to_use)
-    
-    if analysis_result and not analysis_result.get("error"):
-        filter_analysis = analysis_result.get("filters", {})
-        analysis_input_tokens = analysis_result.get("input_tokens", 0)
-        analysis_output_tokens = analysis_result.get("output_tokens", 0)
-        total_input_tokens += analysis_input_tokens
-        total_output_tokens += analysis_output_tokens
-        logger.info(f"Query analysis successful. Tokens: In={analysis_input_tokens}, Out={analysis_output_tokens}")
-    else:
-        error_detail = analysis_result.get("error", "Unknown error") if analysis_result else "No response"
-        logger.warning(f"Query analysis failed or was skipped. Error: {error_detail}. Proceeding without pre-filtering.")
-        # Potentially set a specific error message in response_data if this is critical
-        # For now, it proceeds with empty filter_analysis
+    filter_analysis = await analyze_query_for_filters(user_query)
+    if filter_analysis is None:
+        filter_analysis = {}
+        logger.warning("Query analysis failed. Proceeding without pre-filtering.")
 
     # --- Initialize filter-related variables ---
     name_filter_fields = {'Family', 'Friends'} 
@@ -662,66 +408,28 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
         if fallback_triggered_due_to_names:
             answer = f"No entries were found explicitly tagged with '{person_names_for_prompt}' for the given period, even after broadening the search."
         # Add similar specific message for tag fallback if desired
-        response_data["answer"] = answer
-        # response_data["sources"] is already []
-        # TODO: Calculate cost even for failed queries based on analysis tokens if any
-        return response_data
+        return {"answer": answer, "sources": []}
 
     # --- Semantic Search for Exemplars (using TOP_K, e.g., 15) ---
     faiss_indices_for_exemplar_search = [e['faiss_index'] for e in current_candidates_for_metadata_count if 'faiss_index' in e]
     if not faiss_indices_for_exemplar_search:
         logger.warning("No FAISS indices available from metadata-filtered candidates for exemplar search.")
-        answer_text = "Metadata matches found, but no content could be retrieved for examples."
         if is_how_many_times_person_query:
-            answer_text = f"Based on your journal entries, there appear to be {metadata_based_interaction_count} interactions with {person_names_for_prompt}. However, no specific details could be retrieved for examples."
-        response_data["answer"] = answer_text
-        return response_data
+            return {"answer": f"Based on your journal entries, there appear to be {metadata_based_interaction_count} interactions with {person_names_for_prompt}. However, no specific details could be retrieved for examples.", "sources": []}
+        return {"answer": "Metadata matches found, but no content could be retrieved for examples.", "sources": []}
 
     unique_faiss_indices_for_exemplars = sorted(list(set(faiss_indices_for_exemplar_search)))
     exemplar_selector = faiss.IDSelectorBatch(np.array(unique_faiss_indices_for_exemplars, dtype=np.int64))
     
-    # Embedding uses a fixed model for now
-    # TODO: Consider if embedding model choice should also be configurable
-    embedding_input_tokens = 0 # Placeholder for embedding token count
-    
-    embedding_result = await get_embedding(user_query) # Uses default OPENAI_EMBEDDING_MODEL_ID
-    query_embedding_vector = None
-
-    if embedding_result and not embedding_result.get("error"):
-        query_embedding_vector = embedding_result.get("embedding")
-        embedding_input_tokens = embedding_result.get("input_tokens", 0)
-        total_input_tokens += embedding_input_tokens
-        logger.info(f"Query embedding successful. Tokens: In={embedding_input_tokens}")
-    else:
-        error_detail = embedding_result.get("error", "Unknown error") if embedding_result else "No embedding response"
-        logger.error(f"Failed to get embedding for user query. Error: {error_detail}")
-        answer_text = "Error: Could not process query embedding."
+    query_embedding = await get_embedding(user_query)
+    if query_embedding is None:
+        logger.error("Failed to get embedding for user query.")
+        # Return count if available for quant person query
         if is_how_many_times_person_query:
-            answer_text = f"I found {metadata_based_interaction_count} entries for {person_names_for_prompt}, but could not process the query fully to provide details."
-        response_data["answer"] = answer_text
-        # Update cost with any tokens used so far (e.g., analysis tokens)
-        current_cost = 0.0
-        query_analysis_config_for_cost = MODEL_CONFIG.get(query_analysis_model_key_to_use)
-        if query_analysis_config_for_cost:
-            current_cost += (analysis_input_tokens * query_analysis_config_for_cost.get("cost_per_input_token", 0))
-            current_cost += (analysis_output_tokens * query_analysis_config_for_cost.get("cost_per_output_token", 0))
-        response_data["estimated_cost_usd"] = round(current_cost, 6)
-        return response_data
-
-    if not query_embedding_vector: # Double check after error logging if vector is still None
-        # This case should ideally be caught by the error handling above, but as a safeguard:
-        logger.error("Query embedding vector is None even after get_embedding call completed (unexpected state).")
-        response_data["answer"] = "Error: Failed to obtain query embedding vector."
-        # Recalculate cost as above
-        current_cost = 0.0
-        query_analysis_config_for_cost = MODEL_CONFIG.get(query_analysis_model_key_to_use)
-        if query_analysis_config_for_cost:
-            current_cost += (analysis_input_tokens * query_analysis_config_for_cost.get("cost_per_input_token", 0))
-            current_cost += (analysis_output_tokens * query_analysis_config_for_cost.get("cost_per_output_token", 0))
-        response_data["estimated_cost_usd"] = round(current_cost, 6)
-        return response_data
+            return {"answer": f"I found {metadata_based_interaction_count} entries for {person_names_for_prompt}, but could not process the query fully to provide details.", "sources": []}
+        return {"answer": "Error: Could not process query embedding.", "sources": []}
     
-    query_embedding_np = np.array([query_embedding_vector], dtype=np.float32)
+    query_embedding_np = np.array([query_embedding], dtype=np.float32)
     effective_k_exemplars = min(TOP_K, len(unique_faiss_indices_for_exemplars))
     logger.info(f"Performing FAISS search for {effective_k_exemplars} exemplars from {len(unique_faiss_indices_for_exemplars)} candidates...")
 
@@ -733,12 +441,8 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
         except Exception as e:
             logger.error(f"FAISS search for exemplars failed: {e}", exc_info=True)
             if is_how_many_times_person_query:
-                answer_text = f"Based on your journal entries, there were {metadata_based_interaction_count} interactions with {person_names_for_prompt}. Error retrieving examples: {str(e)}"
-                response_data["answer"] = answer_text
-                return response_data
-            answer_text = f"Error during semantic search for examples: {str(e)}"
-            response_data["answer"] = answer_text
-            return response_data
+                return {"answer": f"Based on your journal entries, there were {metadata_based_interaction_count} interactions with {person_names_for_prompt}. Error retrieving examples: {str(e)}", "sources": []}
+            return {"answer": f"Error during semantic search for examples: {str(e)}", "sources": []}
 
     exemplar_context_for_llm = []
     exemplar_sources_for_response = []
@@ -764,17 +468,14 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
         logger.warning("FAISS search for exemplars returned no results or invalid indices.")
 
     if not exemplar_context_for_llm:
-        answer_text = "Found metadata matches, but no specific content could be detailed for examples."
         if is_how_many_times_person_query:
-            answer_text = f"Based on your journal entries, you interacted with {person_names_for_prompt} {metadata_based_interaction_count} times. No specific examples could be detailed."
+            return {"answer": f"Based on your journal entries, you interacted with {person_names_for_prompt} {metadata_based_interaction_count} times. No specific examples could be detailed.", "sources": exemplar_sources_for_response}
         elif is_how_many_times_tag_query: # New branch
-            answer_text = f"Based on your journal entries, you engaged in activities related to {tag_names_for_prompt} {metadata_based_interaction_count} times. No specific examples could be detailed."
-        
-        response_data["answer"] = answer_text
-        response_data["sources"] = exemplar_sources_for_response # Sources might still be useful
-        return response_data
+            return {"answer": f"Based on your journal entries, you engaged in activities related to {tag_names_for_prompt} {metadata_based_interaction_count} times. No specific examples could be detailed.", "sources": exemplar_sources_for_response}
+        else:
+             return {"answer": "Found metadata matches, but no specific content could be detailed for examples.", "sources": exemplar_sources_for_response}
 
-    exemplar_context_str = "\n\n".join(exemplar_context_for_llm)
+    exemplar_context_str = "\\n\\n".join(exemplar_context_for_llm)
     
     # --- Define Prompt Templates ---
     base_system_message_template_general = (
@@ -894,104 +595,27 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
     # logger.debug(f"Final LLM System Prompt:\n{final_system_prompt}")
 
     try:
-        # --- LLM Call for Final Answer ---
-        final_answer_input_tokens = 0
-        final_answer_output_tokens = 0
-        
-        if selected_model_config["provider"] == "openai":
-            response = await asyncio.to_thread(
-                openai_client.chat.completions.create,
-                model=selected_model_config["api_id"], # Use selected API ID
-                messages=[
-                    {"role": "system", "content": final_system_prompt},
-                    {"role": "user", "content": user_message_for_final_llm}
-                ],
-                temperature=0.5,
-                # max_tokens=selected_model_config.get("max_output_tokens") # Optional: if you want to enforce it
-            )
-            answer = response.choices[0].message.content
-            if response.usage:
-                final_answer_input_tokens = response.usage.prompt_tokens
-                final_answer_output_tokens = response.usage.completion_tokens
-                logger.info(f"OpenAI Final Answer Usage: Input={final_answer_input_tokens}, Output={final_answer_output_tokens}")
-
-        elif selected_model_config["provider"] == "anthropic":
-            # Ensure anthropic_client is valid and SDK is loaded
-            if not anthropic_client or not Anthropic: # Check again, belt and braces
-                 raise APIError("Anthropic client not available or SDK not loaded.", request=None, body=None)
-
-            # Anthropic's API expects max_tokens for the completion.
-            # It should be set considering the model's absolute max and what's reasonable for a response.
-            anthropic_max_tokens = selected_model_config.get("max_output_tokens", 1024) # Default to 1024 if not set
-            
-            response = await asyncio.to_thread(
-                anthropic_client.messages.create,
-                model=selected_model_config["api_id"],
-                max_tokens=anthropic_max_tokens, 
-                system=final_system_prompt, # Anthropic uses a 'system' parameter for the system prompt
-                messages=[
-                    {"role": "user", "content": user_message_for_final_llm}
-                ],
-                temperature=0.5
-            )
-            answer = response.content[0].text # Accessing the response content
-            if response.usage:
-                final_answer_input_tokens = response.usage.input_tokens
-                final_answer_output_tokens = response.usage.output_tokens
-                logger.info(f"Anthropic Final Answer Usage: Input={final_answer_input_tokens}, Output={final_answer_output_tokens}")
-        else:
-            logger.error(f"Provider {selected_model_config['provider']} not implemented.")
-            answer = f"Error: Provider {selected_model_config['provider']} not supported."
-            # No tokens to add for an unsupported provider
-
-        total_input_tokens += final_answer_input_tokens
-        total_output_tokens += final_answer_output_tokens
-        logger.info(f"Total Tokens for Query: Input={total_input_tokens}, Output={total_output_tokens}")
-
-        response_data["answer"] = answer
-        response_data["input_tokens"] = total_input_tokens
-        response_data["output_tokens"] = total_output_tokens
-        
-        # --- Cost Calculation ---
-        cost = 0.0
-        # Cost for query analysis (assuming it's always OpenAI and uses its own config for now)
-        query_analysis_config_for_cost = MODEL_CONFIG.get(query_analysis_model_key_to_use)
-        if query_analysis_config_for_cost:
-            cost += (analysis_input_tokens * query_analysis_config_for_cost.get("cost_per_input_token", 0))
-            cost += (analysis_output_tokens * query_analysis_config_for_cost.get("cost_per_output_token", 0))
-            logger.debug(f"Cost after query analysis ({query_analysis_model_key_to_use}): ${cost:.6f}")
-        
-        # Cost for embedding (assuming fixed OpenAI model)
-        embedding_config_for_cost = MODEL_CONFIG.get(OPENAI_EMBEDDING_MODEL_ID) # Or a dynamic key if it becomes selectable
-        if embedding_config_for_cost:
-            cost += (embedding_input_tokens * embedding_config_for_cost.get("cost_per_input_token", 0))
-            # Embedding output tokens usually 0 or not directly charged / or cost is per 1K tokens input only
-            logger.debug(f"Cost after embedding ({OPENAI_EMBEDDING_MODEL_ID}): ${cost:.6f}")
-
-        # Cost for final answer generation
-        cost += (final_answer_input_tokens * selected_model_config.get("cost_per_input_token", 0))
-        cost += (final_answer_output_tokens * selected_model_config.get("cost_per_output_token", 0))
-        
-        response_data["estimated_cost_usd"] = round(cost, 6) # Round to 6 decimal places
-        logger.info(f"Estimated cost for the query: ${response_data['estimated_cost_usd']:.6f}")
-
+        response = await asyncio.to_thread(
+            openai_client.chat.completions.create,
+            model=FINAL_ANSWER_MODEL,
+            messages=[
+                {"role": "system", "content": final_system_prompt},
+                {"role": "user", "content": user_message_for_final_llm}
+            ],
+            temperature=0.5 
+        )
+        answer = response.choices[0].message.content
         logger.info("Received answer from final LLM.")
     except Exception as e:
-        logger.error(f"Error during final LLM call or processing: {e}", exc_info=True)
-        error_answer = f"An error occurred: {str(e)}"
+        logger.error(f"Error during final LLM call: {e}", exc_info=True)
+        # answer_on_llm_error = "Error generating final answer." # This variable is not used.
         if is_how_many_times_person_query:
-            error_answer = f"Based on your records, there are {metadata_based_interaction_count} relevant entries for {person_names_for_prompt}. However, an error occurred generating a detailed summary: {str(e)}"
-        elif is_how_many_times_tag_query: 
-            error_answer = f"Based on your records, there are {metadata_based_interaction_count} relevant entries for activities related to {tag_names_for_prompt}. However, an error occurred generating a detailed summary: {str(e)}"
-        response_data["answer"] = error_answer
-        # Keep any tokens accumulated so far for partial cost estimation if desired, or reset.
-        # For simplicity, if LLM call fails, cost might only reflect previous steps if they were tokenized.
-        # Here, we're only calculating cost after successful LLM call.
-        # A more robust approach would sum tokens at each step and calculate cost even on partial failure.
+            return {"answer": f"Based on your records, there are {metadata_based_interaction_count} relevant entries for {person_names_for_prompt}. However, an error occurred generating a detailed summary: {str(e)}", "sources": exemplar_sources_for_response}
+        elif is_how_many_times_tag_query: # New branch
+            return {"answer": f"Based on your records, there are {metadata_based_interaction_count} relevant entries for activities related to {tag_names_for_prompt}. However, an error occurred generating a detailed summary: {str(e)}", "sources": exemplar_sources_for_response}
+        return {"answer": f"An error occurred: {str(e)}", "sources": exemplar_sources_for_response}
 
     end_time = time.time()
     logger.info(f"RAG process completed in {end_time - start_time:.2f} seconds.")
     logger.info(f"Final sources for response (exemplars): {json.dumps(exemplar_sources_for_response, indent=2)}")
-    
-    response_data["sources"] = exemplar_sources_for_response
-    return response_data
+    return {"answer": answer, "sources": exemplar_sources_for_response}

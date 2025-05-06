@@ -205,6 +205,36 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
   - [ ] **Cost Management:** Implement token usage tracking and estimated cost calculation per query, potentially displaying it in the UI.
   - [ ] **Configuration:** Move more hardcoded values (models, paths, `TOP_K`, prompts) to a configuration file or environment variables.
 
+- [ ] **New Feature: Model Selection & Cost Estimation**
+  - [x] **Phase 1: Backend - Merge Original RAG Logic & Finalize Multi-Provider Support**
+    - [x] **CRITICAL: Task 1.0 (Backend - `rag_query.py`): Full RAG Pipeline Integration.**
+      - [x] Ensure RAG pipeline logic (metadata filtering, FAISS search, context retrieval, prompt assembly) integrates with model selection, token counting, and cost calculation.
+      - [x] Ensure all early `return` statements within `perform_rag_query` are updated to return a dictionary matching the `QueryResponse` model in `backend/main.py`.
+    - [x] Task 1.1 (Backend - `rag_query.py`): Define `MODEL_CONFIG` dictionary for OpenAI & Anthropic (include `provider`, `api_id`, `cost_per_input_token`, `cost_per_output_token`, `max_output_tokens`).
+    - [x] Task 1.1.1 (Backend - `rag_query.py`): Modify `perform_rag_query` signature to accept `model_name`. Update `analyze_query_for_filters`, `get_embedding`, and final LLM call to use `api_id` from selected model in `MODEL_CONFIG`.
+    - [x] Task 1.2 (Backend - `rag_query.py`): Implement OpenAI & Anthropic Token Counting (capture `prompt_tokens`, `completion_tokens` from API responses for all LLM calls within `rag_query.py`).
+    - [x] Task 1.3 (Backend - `rag_query.py`): Implement OpenAI & Anthropic Cost Calculation (using token counts and `MODEL_CONFIG` pricing for all stages in `rag_query.py`).
+    - [x] Task 1.4 (Backend - `rag_query.py` & `main.py`): Update Return Values & Response Model.
+        - [x] `main.py`: `QueryResponse` model reflects all new fields (model_used, tokens, cost etc.).
+        - [x] `rag_query.py`: Ensure `perform_rag_query` returns all required fields for `QueryResponse` (answer, sources, model_used, model_api_id_used, model_provider_used, input_tokens, output_tokens, estimated_cost_usd).
+  - [ ] **Phase 2: Frontend - Display Full Model Info & Costs**
+    - [x] Task 2.1 (Frontend - `App.tsx`): Update `QueryResponse` Interface & State (add all new fields from backend, add state variables, update `handleSubmit` and `handleClear`).
+    - [x] Task 2.2 (Frontend - `App.tsx`): Enhance UI to Display New Info (Model Name, Provider, Tokens, Cost).
+  - [x] **Phase 3: Backend - Anthropic Full Integration**
+    - [x] Task 3.1 (Backend - Environment & SDK): Verify/Add Anthropic SDK to `backend/requirements.txt`.
+    - [x] Task 3.2 (Backend - `main.py`/`rag_query.py`): Implement `initialize_anthropic_client` in `rag_query.py` and ensure `main.py` calls it.
+    - [x] Task 3.3 (Backend - `rag_query.py`): Update `MODEL_CONFIG` to include full details for Anthropic models.
+    - [x] Task 3.4 (Backend - `rag_query.py`): Implement LLM Calls for Anthropic provider in `perform_rag_query` (actual API call logic for final answer generation).
+    - [x] Task 3.5 (Backend - `rag_query.py`): Ensure cost calculation (Task 1.3) works for Anthropic models (for final answer generation).
+  - [ ] **Phase 4: Testing & Verification**
+    - [ ] Task 4.1 (Frontend - `App.tsx` & Backend): Verify full end-to-end functionality for both OpenAI and Anthropic models, including correct RAG answers, model info display, token counts, and cost estimation.
+      - [x] Initial testing performed for OpenAI (gpt-4o, gpt-4o-mini) and Anthropic (Claude 3.5 Haiku).
+      - [x] Backend `MODEL_CONFIG` updated to include correct API IDs and pricing for tested models.
+      - [x] Identified and fixed issues related to model key mismatches between frontend selection and backend configuration.
+      - [ ] Further testing across a wider range of queries and edge cases recommended.
+  - [ ] **Documentation & Design:**
+    - [x] Create `design/MODEL_SELECTION_COST_TDD.md` outlining the design for this feature.
+
 - [ ] **Testing & Reliability:**
   - [ ] Implement comprehensive unit tests for core modules (API client, extractors, transformers, storage, RAG components).
   - [ ] Implement integration tests for `cli.py` export and query workflows.
@@ -258,28 +288,4 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 - `tests/` - Directory for test code
 - `docs/` - Directory for documentation
 - `backend/` - Directory for backend API server code ✅
-  - `backend/main.py` - FastAPI/Flask application entry point ✅
-  - `backend/rag_query.py` - Refactored RAG query logic ✅
-  - `backend/requirements.txt` - Backend Python dependencies ✅
-- `frontend/` - Directory for React frontend code ✅
-  - `frontend/src/App.tsx` - Main React application component ✅
-  - `frontend/src/components/ui/` - shadcn/ui components ✅
-  - `frontend/package.json` - Frontend Node.js dependencies ✅
-  - `frontend/vite.config.ts` - Vite configuration ✅
-  - `frontend/tailwind.config.js` - Tailwind CSS configuration ✅
-  - `frontend/tsconfig.json` - TypeScript configuration ✅
-  - `frontend/tsconfig.app.json` - TypeScript app configuration ✅
-  - `frontend/src/lib/utils.ts` - shadcn utility functions ✅
-  - `frontend/components.json` - shadcn configuration file ✅
-
-- [x] **Implement Initial Indexing (Batch Rollout):**
-  - [x] Modify `cli.py` to support `--month YYYY-MM` export argument & filtering logic.
-  - [x] Create control script (`scripts/batch_export.py`) to run monthly exports.
-  - [x] Modify `build_index.py` to process multiple JSON files incrementally.
-  - [x] Modify `build_index.py` to load/save existing index/mapping for checkpointing.
-  - [x] Modify `build_index.py` to use batch embedding requests.
-  - [x] Execute batch export (`scripts/batch_export.py`) for all historical data.
-  - [x] Execute index build (`build_index.py`) for all historical data.
-
-- [ ] **Documentation:**
-  - [x] **Create System Overview Document (`RAG_SYSTEM_OVERVIEW.md`):** Write a comprehensive document in the project root (`RAG_SYSTEM_OVERVIEW.md`) detailing the end-to-end data flow and RAG query processing logic, as discussed.
+  - `backend/main.py`
