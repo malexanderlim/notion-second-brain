@@ -191,49 +191,50 @@ function App() {
       <div className="w-full max-w-2xl space-y-8">
         <h1 className="text-3xl font-bold text-center">Query Your Second Brain</h1>
         
-        {/* NEW: Model Selector Dropdown */}
-        <div className="flex flex-col space-y-1.5">
-          <label htmlFor="model-select" className="text-sm font-medium text-foreground">Select Model:</label>
-          <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
-            <SelectTrigger id="model-select" className="w-full">
-              <SelectValue placeholder="Select a model" />
-            </SelectTrigger>
-            <SelectContent>
-              {AVAILABLE_MODELS.map(model => (
-                <SelectItem key={model.value} value={model.value}>
-                  {model.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <div className="flex gap-2 items-center w-full">
+            <Input 
+              type="text"
+              placeholder="Ask your Notion knowledge base..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              disabled={isLoading}
+              className="flex-grow"
+            />
+            <Button type="submit" disabled={isLoading || !query.trim()}>
+              {isLoading ? (
+                <LoaderCircle className="animate-spin h-5 w-5" /> 
+              ) : (
+                "Query"
+              )}
+            </Button>
+            <Button 
+              type="button"
+              variant="outline" 
+              size="icon" 
+              onClick={handleClear}
+              disabled={isLoading || isClearDisabled} 
+              aria-label="Clear query and results"
+            >
+              <X className="h-5 w-5" />
+            </Button>
+          </div>
 
-        <form onSubmit={handleSubmit} className="flex gap-2 items-center">
-          <Input 
-            type="text"
-            placeholder="Ask your Notion knowledge base..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            disabled={isLoading}
-            className="flex-grow"
-          />
-          <Button type="submit" disabled={isLoading || !query.trim()}>
-            {isLoading ? (
-              <LoaderCircle className="animate-spin h-5 w-5" /> 
-            ) : (
-              "Query"
-            )}
-          </Button>
-          <Button 
-            type="button" // Important: type="button" prevents form submission
-            variant="outline" 
-            size="icon" // Use icon size for a smaller button
-            onClick={handleClear}
-            disabled={isLoading || isClearDisabled} // Disable when loading or nothing to clear
-            aria-label="Clear query and results"
-          >
-            <X className="h-5 w-5" />
-          </Button>
+          <div className="flex flex-col space-y-1.5">
+            <label htmlFor="model-select" className="text-sm font-medium text-foreground">Select Model:</label>
+            <Select value={selectedModel} onValueChange={setSelectedModel} disabled={isLoading}>
+              <SelectTrigger id="model-select" className="w-full">
+                <SelectValue placeholder="Select a model" />
+              </SelectTrigger>
+              <SelectContent>
+                {AVAILABLE_MODELS.map(model => (
+                  <SelectItem key={model.value} value={model.value}>
+                    {model.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
         </form>
 
         {/* Suggestion Display */} 
