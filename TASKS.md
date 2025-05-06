@@ -138,15 +138,44 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [ ] **Persist Query History:** Modify state to store a list of query/response/error entries instead of just the latest one. Update rendering logic to display the history.
   - [ ] **Future UI Enhancements:**
     - [ ] **Voice Input:** Add a microphone icon/button to allow users to ask questions via voice. Requires using browser Web Speech API (for speech recognition) or integrating a dedicated speech-to-text service.
-  - [ ] **Integration & Testing:**
-    - [x] Run backend and frontend dev servers concurrently.
-    - [x] Perform end-to-end test: Query -> Submit -> Loading -> Answer + Sources displayed. (Verified after resolving backend/CLI discrepancies).
-    - [ ] Test error handling path (e.g., simulate backend failure).
+    - [ ] **Improve RAG Output Display (`frontend/src/App.tsx`):**
+      - [ ] **Answer Block Styling:**
+        - [ ] Confirm `react-markdown` (or equivalent) correctly renders LLM-provided markdown (bolding, emphasis).
+        - [ ] Apply Tailwind CSS `prose` classes (or similar custom styling) to the answer container for enhanced typography, paragraph spacing, and readability.
+        - [ ] Style inline citations (e.g., `(Date: YYYY-MM-DD, Journal Entry: [Title](URL))`) for better visual distinction (e.g., slightly smaller font, subtle background, clear link styling).
+      - [ ] **"Sources Used" List Enhancements:**
+        - [ ] Implement client-side sorting of the `sources` array by date in ascending order before rendering.
+        - [ ] Create and use a date formatting function (e.g., using `toLocaleDateString` or a library like `date-fns`) to display dates human-readably (e.g., "January 21, 2025").
+        - [ ] Restyle each source item for clarity and better visual separation (e.g., using card-like elements or styled list items via Tailwind CSS). Each item should clearly display:
+          - The hyperlinked `source.title`.
+          - The formatted `source.date`.
+        - [ ] Ensure consistent and clear link styling for source titles.
+        - [ ] Consider subtle iconography (e.g., calendar icon for date) if it enhances UX without clutter.
+      - [ ] **Overall Readability:**
+        - [ ] Review font choices, line heights, and color contrasts for optimal readability in both light and dark modes.
 
 - [ ] **Further RAG Enhancements:**
   - [ ] **Model Exploration:**
     - [ ] Evaluate alternative/newer embedding models (e.g., OpenAI text-embedding-3-small/large, local models like Sentence Transformers) for potential cost/performance/accuracy benefits.
     - [ ] Test alternative final answer generation models (e.g., other OpenAI models, Anthropic Claude models via API) for cost/accuracy trade-offs.
+  - [ ] **Improve Name Handling in Queries (Fallback and Prompting):**
+    - [ ] **Modify Pre-filtering Logic (`backend/rag_query.py`):**
+      - [ ] After applying name-based metadata filters (e.g., 'Family', 'Friends'), check if candidate count is zero *and* if name filters were active.
+      - [ ] If so, revert to the candidate list that existed *before* name filtering (i.e., only date and other non-name metadata filters applied). Log this fallback action.
+      - [ ] If this pre-name-filter candidate list is also empty, then report "no results."
+      - [ ] Otherwise, proceed to semantic search with this broader candidate list.
+    - [ ] **Enhance Final Answer Generation Prompt (`backend/rag_query.py`):**
+      - [ ] If the name pre-filtering fallback was triggered, modify the prompt to the final LLM.
+      - [ ] Explicitly instruct the LLM to:
+        - Carefully scan the provided context documents for mentions of the name(s) from the original query.
+        - Prioritize synthesizing an answer that directly addresses the query by focusing on information related to the named individual(s) found *within the content*.
+        - If the name(s) are not found in the retrieved content despite the fallback, the LLM should state that clearly.
+  - [ ] **Implement Tag-Based Filtering Fallback (`backend/rag_query.py`):**
+    - [ ] **Logic:** Similar to the name filter fallback, if metadata filtering based on tags (e.g., 'Tags' field) results in zero candidates, attempt a broader search.
+    - [ ] Store the candidate list *before* applying tag filters.
+    - [ ] If tag filtering yields zero results *and* tag filters were active, revert to the pre-tag-filter candidate list for semantic search.
+    - [ ] Log this fallback action.
+    - [ ] **Prompt Engineering:** If tag fallback is triggered, consider adjusting the final LLM prompt to indicate that while specific tags weren't matched, the content was searched more broadly for the query concepts.
   - [ ] **Chunking Strategy:** Investigate alternatives to embedding entire entries. Explore fixed-size, sentence-based, or content-aware chunking to potentially improve retrieval specificity and reduce context size.
   - [ ] **Retrieval Tuning:**
     - [ ] Experiment with different `TOP_K` values and analyze the cost/accuracy trade-off more formally.

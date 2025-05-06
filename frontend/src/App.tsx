@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { LoaderCircle, X, Info } from 'lucide-react'; // Import LoaderCircle, X icon, and Info icon
+import { LoaderCircle, X, Info, CalendarDays, Link as LinkIcon } from 'lucide-react'; // Added CalendarDays & LinkIcon
 import ReactMarkdown from 'react-markdown'; // Import ReactMarkdown
 // Import a suitable loader icon if needed later, e.g., from lucide-react
 // import { LoaderCircle } from 'lucide-react';
@@ -14,6 +14,8 @@ import ReactMarkdown from 'react-markdown'; // Import ReactMarkdown
 interface SourceDocument {
   title: string;
   url: string;
+  date: string; // Made date non-optional for stricter checking, assuming backend always sends it based on logs.
+  id?: string;   
 }
 
 // Reverted QueryResponse interface
@@ -26,6 +28,23 @@ interface QueryResponse {
 const RECENT_KEYWORDS = ["recently", "latest", "last time", "most recent"];
 const YEAR_REGEX = /\b(19|20)\d{2}\b/; // Matches 4-digit years starting 19 or 20
 const SUGGESTION_MESSAGE = "Queries about recent events work best with a timeframe (e.g., '...in 2024', '...last month').";
+
+// --- MODIFICATION START: Date formatting utility ---
+const formatDate = (dateString: string | undefined): string => {
+  if (!dateString) return 'Date not available';
+  try {
+    // Attempt to create a valid date object. Handles YYYY-MM-DD.
+    const date = new Date(dateString + 'T00:00:00'); // Ensure parsing as local date, not UTC
+    if (isNaN(date.getTime())) {
+      return dateString; // Return original if invalid
+    }
+    const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+    return date.toLocaleDateString(undefined, options);
+  } catch (e) {
+    return dateString; // Fallback to original string if date parsing fails
+  }
+};
+// --- MODIFICATION END ---
 
 function App() {
   const [query, setQuery] = useState<string>("");
@@ -68,6 +87,13 @@ function App() {
           headers: { 'Content-Type': 'application/json' }
         }
       );
+      // --- MODIFIED DEBUGGING ---
+      console.log("Axios raw result.data:", result.data); 
+      if (result.data.sources && result.data.sources.length > 0) {
+        console.log("First source object from Axios:", result.data.sources[0]);
+        console.log("Does first source have 'date' property?", result.data.sources[0].hasOwnProperty('date'));
+      }
+      // --- END DEBUGGING ---
       setResponse(result.data);
     } catch (err: any) {
       console.error("API Error:", err);
@@ -177,15 +203,17 @@ function App() {
               <div className="prose dark:prose-invert max-w-none mb-6">
                 <ReactMarkdown 
                   components={{
-                    // Ensure links open in new tab AND are styled blue
+                    // Ensure links open in new tab AND are styled
                     a: ({node, ...props}) => (
                       <a 
                         {...props} 
                         target="_blank" 
                         rel="noopener noreferrer" 
-                        className="text-blue-600 hover:underline dark:text-blue-400"
+                        // Enhanced styling for inline citation links
+                        className="text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 hover:underline focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-opacity-50 rounded-sm"
                       />
-                    )
+                    ),
+                    p: ({node, ...props}) => <p className="mb-3 leading-relaxed" {...props} /> // Improved paragraph spacing
                   }}
                 >
                   {response.answer}
@@ -194,23 +222,40 @@ function App() {
               
               {/* Display Sources */}
               {response.sources && response.sources.length > 0 && (
-                <div>
-                  <h3 className="font-semibold mb-2 text-sm text-muted-foreground">Sources Used:</h3>
-                  <ul className="list-disc list-inside space-y-1 text-sm">
-                    {response.sources.map((source, index) => (
-                      <li key={index}>
+                // --- MODIFICATION START: Revert to Simple Bulleted Sources List --- 
+                <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700">
+                  <h3 className="text-base font-semibold mb-3 text-slate-700 dark:text-slate-300">Sources Used:</h3>
+                  <ul className="list-disc list-inside space-y-2 text-sm">
+                    {response.sources
+                      .slice() 
+                      .sort((a, b) => {
+                        if (!a.date || !b.date) return 0; 
+                        try {
+                          return new Date(a.date + 'T00:00:00').getTime() - new Date(b.date + 'T00:00:00').getTime(); 
+                        } catch (e) {
+                          return 0; 
+                        }
+                      })
+                      .map((source) => (
+                      <li key={source.id || source.url} className="text-slate-600 dark:text-slate-400">
                         <a 
                           href={source.url}
                           target="_blank" 
                           rel="noopener noreferrer"
-                          className="text-blue-600 hover:underline dark:text-blue-400"
+                          className="text-blue-600 hover:underline dark:text-blue-400 visited:text-purple-600 dark:visited:text-purple-400"
                         >
                           {source.title || "Untitled Source"}
                         </a>
+                        {source.date && (
+                          <span className="ml-2 text-xs text-slate-500 dark:text-slate-500">
+                            ({formatDate(source.date)})
+                          </span>
+                        )}
                       </li>
                     ))}
                   </ul>
                 </div>
+                // --- MODIFICATION END --- 
               )}
             </CardContent>
           </Card>
