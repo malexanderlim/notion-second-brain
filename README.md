@@ -1,320 +1,155 @@
 # notion-second-brain
 
-A project to extract journal entries from Notion, process them into a queryable format, and build an interface to interact with your personal knowledge.
+A project to extract journal entries from Notion, process them, build a Retrieval Augmented Generation (RAG) system, and provide a web interface to query your personal knowledge with selectable LLMs and cost estimation.
 
 ## Project Overview
 
-This project aims to build a system that can:
-1. Extract journal entries from Notion via their API
-2. Organize and process the data by various time periods (day, week, month, year, all time)
-3. Store the data in a format suitable for querying by LLMs
-4. (Future) Create a chat interface to interact with your journal data
+This project implements a full RAG pipeline that can:
+1. Extract journal entries from Notion via their API.
+2. Process and index this data using vector embeddings (FAISS) and metadata.
+3. Offer a web-based chat interface to query your journal data.
+4. Allow selection from multiple Large Language Models (e.g., OpenAI GPT series, Anthropic Claude series).
+5. Provide token usage and estimated cost per query.
+6. Support advanced query features like metadata filtering and semantic search.
 
 ## Technology Stack
 
-- **Backend**: Python (Flask or FastAPI for future API endpoints)
-- **Data Processing**: Python (requests, json, datetime)
-- **Storage**: JSON files initially, potential database integration later
-- **LLM Integration**: OpenAI API or Anthropic's Claude API
-- **Frontend** (future): React or Next.js
+- **Backend**: Python, FastAPI
+- **Data Processing & Indexing**: Python, `requests`, `faiss-cpu`, `openai` (for embeddings)
+- **LLM Integration**: OpenAI API, Anthropic API
+- **Frontend**: React (Vite + TypeScript), Tailwind CSS, shadcn/ui, axios
+- **Storage**: JSON files for data export, FAISS index, and mappings.
 
-## Development Phases
+## Development Phases (Current Status)
 
-### Phase 1: Notion Data Extraction (MVP)
+Many of the initial phases outlined below have been completed or superseded by the current RAG implementation with a web UI.
 
-#### 1.1 Setup Project Structure
-- Initialize Git repository
-- Create virtual environment
-- Setup basic project scaffolding
-- Create README.md with project overview
+### Phase 1: Notion Data Extraction (MVP) - LARGELY COMPLETE
+- Functionality to connect to Notion, extract entries, and save them to JSON is implemented via `cli.py`.
 
-#### 1.2 Notion API Integration
-- Set up Notion integration
-- Connect to Notion API
-- Retrieve database ID and test connection
-- Implement basic query to fetch journal entries
+### Phase 2: Data Processing and Storage - LARGELY COMPLETE
+- `build_index.py` handles processing exported JSON, creating embeddings, building the FAISS index (`index.faiss`), creating entry-to-index mappings (`index_mapping.json`), and caching metadata (`metadata_cache.json`).
 
-#### 1.3 Data Extraction and Processing
-- Extract text content from journal entries
-- Parse and clean the data
-- Implement date-based filtering (day, week, month, year)
-- Create data structures to organize content
+### Phase 3: Query Interface - LARGELY COMPLETE
+- `cli.py` provides basic CLI query functionality.
+- The FastAPI backend (`backend/main.py`, `backend/rag_query.py`) implements the full RAG pipeline, serving as the query engine for the web UI.
+- Features include model selection, token counting, cost estimation, metadata filtering, and semantic search.
 
-#### 1.4 JSON Export
-- Create functionality to export data as JSON
-- Organize JSON by time periods
-- Implement file naming conventions
-- Add metadata to exported files
-
-### Phase 2: Data Processing and Storage
-
-#### 2.1 Enhanced Data Processing
-- Implement better text extraction for various block types
-- Add support for handling images references
-- Create summary statistics for journal entries
-- Implement topic extraction or categorization
-
-#### 2.2 Storage System
-- Design a more robust storage system
-- Implement incremental sync functionality
-- Add versioning for exported data
-- Create a data update pipeline
-
-#### 2.3 Data Transformation for LLMs
-- Create embedding generation for entries
-- Implement chunking strategies
-- Design metadata structure for improved retrieval
-- Build utility functions for data preparation
-
-### Phase 3: Query Interface
-
-#### 3.1 Command Line Interface
-- Build a CLI to trigger extraction and sync
-- Add query capabilities from command line
-- Implement basic search functionality
-- Create reporting and statistics features
-
-#### 3.2 LLM Integration
-- Integrate with OpenAI or Claude API
-- Implement RAG (Retrieval Augmented Generation) pattern
-- Create prompt templates for different query types
-- Build context window management
-
-### Phase 4: Web Interface (Future)
-
-#### 4.1 Backend API
-- Design RESTful API
-- Implement authentication
-- Create endpoints for data retrieval
-- Build query processing middleware
-
-#### 4.2 Frontend Development
-- Set up React/Next.js application
-- Create UI for chat interface
-- Implement data visualization components
-- Build user authentication
+### Phase 4: Web Interface - LARGELY COMPLETE
+- A React/Vite/TypeScript frontend (`frontend/`) provides a chat-like UI to query the RAG system.
+- Users can select models, view answers, sources, and query cost information.
 
 ## Implementation Plan
 
-### Week 1: Project Setup & Basic Notion Integration
-- [ ] Initialize project repository
-- [ ] Create virtual environment and install dependencies
-- [ ] Setup Notion integration
-- [ ] Implement basic API connection
-- [ ] Test connection with a simple query
-- [ ] Write comprehensive README.md
-
-### Week 2: Core Data Extraction
-- [ ] Build database query functionality
-- [ ] Implement pagination for large databases
-- [ ] Create text extraction for different block types
-- [ ] Build date parsing and filtering
-- [ ] Implement basic error handling
-
-### Week 3: Data Organization & Export
-- [ ] Develop time-based filtering (day, week, month, year)
-- [ ] Build JSON export functionality
-- [ ] Implement file organization structure
-- [ ] Create metadata generation
-- [ ] Add command line arguments for extraction options
-
-### Week 4: Testing & Refinement
-- [ ] Write unit tests for API interaction
-- [ ] Create integration tests for data extraction
-- [ ] Implement edge case handling
-- [ ] Add logging and monitoring
-- [ ] Document code and API usage
-- [ ] Release MVP version
+The initial week-by-week plan has been largely executed, leading to the current feature set.
 
 ## Cursor Development Guidelines
 
-### Project Organization
-
-```
-notion-second-brain/
-├── .gitignore
-├── README.md
-├── requirements.txt
-├── setup.py
-├── .env.example
-├── docs/
-│   └── api_usage.md
-├── tests/
-│   ├── __init__.py
-│   ├── test_notion_api.py
-│   └── test_data_processing.py
-└── notion_second_brain/
-    ├── __init__.py
-    ├── config.py
-    ├── notion/
-    │   ├── __init__.py
-    │   ├── api.py
-    │   └── extractors.py
-    ├── processing/
-    │   ├── __init__.py
-    │   ├── filters.py
-    │   └── transformers.py
-    ├── storage/
-    │   ├── __init__.py
-    │   └── json_storage.py
-    └── cli.py
-```
-
-### Development Rules
-
-1. **Incremental Development**: Follow the task breakdown and work on one component at a time
-2. **Test-Driven Development**: Write tests before implementing features
-3. **Documentation**: Document code and keep README updated
-4. **Environment Variables**: Store all sensitive information in environment variables
-5. **Error Handling**: Implement robust error handling for API interactions
-6. **Git Workflow**: Commit frequently with descriptive messages
-7. **Task Management**: Create GitHub issues for each task and track progress
+(This section can be updated if specific new guidelines for Cursor are needed)
 
 ## Getting Started
 
-These steps assume you have Python 3 and `git` installed.
+These steps assume you have Python 3, Node.js (with npm or yarn), and `git` installed.
 
 1.  **Clone the Repository:**
     ```bash
-    git clone <your-repository-url> # Replace with your repo URL if pushed to GitHub/etc.
+    git clone <your-repository-url> # Replace with your repo URL
     cd notion-second-brain
     ```
-    *(If you didn't clone, ensure you are in the `notion-second-brain` directory)*
 
-2.  **Create and Activate Virtual Environment:**
-    ```bash
-    # Create the environment (only needs to be done once)
-    python3 -m venv venv 
+2.  **Setup Backend:**
+    - Navigate to the `backend` directory: `cd backend`
+    - Create and activate a Python virtual environment:
+      ```bash
+      python3 -m venv venv
+      source venv/bin/activate # macOS/Linux
+      # venv\Scripts\activate.bat # Windows Cmd
+      # venv\Scripts\Activate.ps1 # Windows PowerShell
+      ```
+    - Install backend Python dependencies:
+      ```bash
+      pip install -r requirements.txt
+      ```
+    - Go back to the project root: `cd ..`
 
-    # Activate the environment (needs to be done every time you open a new terminal)
-    # On macOS/Linux (bash/zsh):
-    source venv/bin/activate
-    # On Windows (Cmd):
-    # venv\Scripts\activate.bat
-    # On Windows (PowerShell):
-    # venv\Scripts\Activate.ps1
-    ```
-    *Your terminal prompt should now indicate the active environment, e.g., `(venv)`.*
-
-3.  **Install Dependencies:**
-    ```bash
-    pip3 install -r requirements.txt
-    # or just 'pip' if pip3 is not found within the activated venv
-    # pip install -r requirements.txt 
-    ```
-
-4.  **Set up Notion Integration:**
+3.  **Set up Notion Integration:**
     - Go to [https://www.notion.so/my-integrations](https://www.notion.so/my-integrations) and create a new **internal** integration.
     - Copy the "Internal Integration Token".
     - Find the ID of the Notion database you want to use.
-      *(Hint: The database ID is the part of the URL between your workspace name and the `?v=`..., e.g., `https://www.notion.so/yourworkspace/DATABASEID?v=...`)*
-    - Share the database with the integration you created (click the `...` menu on the database page > "Add connections" > find your integration).
+    - Share the database with the integration you created.
 
-5.  **Configure Environment Variables:**
-    - Make a copy of the `.env.example` file and name it `.env`:
+4.  **Configure Environment Variables:**
+    - In the project root, copy `.env.example` to `.env`:
       ```bash
       cp .env.example .env
       ```
-    - Open the `.env` file and paste your Notion token and database ID:
+    - Open the `.env` file and add your keys:
       ```dotenv
       NOTION_TOKEN=secret_YOUR_NOTION_TOKEN
       NOTION_DATABASE_ID=YOUR_DATABASE_ID
-      ```
-
-6.  **Set up OpenAI API Key (for Querying):**
-    - Get an API key from [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys).
-    - Add the key to your `.env` file:
-      ```dotenv
-      NOTION_DATABASE_ID=YOUR_DATABASE_ID
       OPENAI_API_KEY=sk-YOUR_OPENAI_API_KEY
+      ANTHROPIC_API_KEY=sk-YOUR_ANTHROPIC_API_KEY # Add your Anthropic key
       ```
 
-7.  **Test the Setup:**
-    ```bash
-    python cli.py --test-connection
-    ```
-    *Output files will be saved in the `output/` directory by default.*
+5.  **Export Notion Data & Build Index:**
+    - (If you haven't already) Export your Notion data using `cli.py`.
+      For example, to export all data for a specific month (e.g., January 2024) to be used for indexing:
+      ```bash
+      python cli.py --export-month 2024-01 
+      ```
+      This creates `output/2024-01.json`. You might want to run this for all relevant months, or use `--period all` for a single comprehensive file (though monthly can be more manageable for very large journals).
+    - Build the RAG index from the exported JSON files:
+      ```bash
+      python build_index.py 
+      ```
+      This will process all `*.json` files in the `output/` directory by default and create `index.faiss`, `index_mapping.json`, and `metadata_cache.json` in the project root. Ensure `schema.json` is also present or correctly generated/placed in the root, as it's used by the RAG system.
 
-8.  **Run an Extraction:**
-    ```bash
-    # Example: Extract all entries
-    python cli.py
+6.  **Run the Backend Server:**
+    - Ensure your Python virtual environment (created in step 2) is active.
+    - From the project root directory:
+      ```bash
+      uvicorn backend.main:app --reload --port 8000
+      ```
+    - The API server should now be running on `http://localhost:8000`.
 
-    # Example: Extract entries from today
-    python cli.py -p day
-
-    # Example: Extract entries from a specific week (using verbose logging)
-    python cli.py -p week --date 2023-10-23 -v
-    ```
-    *Output files will be saved in the `output/` directory by default.*
+7.  **Run the Frontend Application:**
+    - Open a new terminal.
+    - Navigate to the `frontend` directory: `cd frontend`
+    - Install frontend dependencies:
+      ```bash
+      npm install 
+      # or yarn install
+      ```
+    - Start the frontend development server:
+      ```bash
+      npm run dev
+      # or yarn dev
+      ```
+    - Open your browser and navigate to the URL provided (usually `http://localhost:5173`).
 
 ## Usage
 
-The primary way to interact with the tool is through `cli.py`.
+1.  **Ensure your data is exported and indexed** (see steps 5 in "Getting Started").
+2.  **Run the backend server** (step 6).
+3.  **Run the frontend application** (step 7).
+4.  Open the frontend URL in your browser.
+5.  Select your desired Language Model from the dropdown.
+6.  Type your query into the input box and press Enter or click "Query".
+7.  View the answer, sources, model details, and estimated cost.
 
-### 1. Exporting Entries (Optional - Needed for Indexing)
+### CLI Querying (Legacy/Alternative)
 
-Use the `--export` flag (or run without other action flags) along with optional filters to save Notion entries to JSON files in the `output/` directory.
-
-```bash
-# Export all entries (creates output/all_time.json)
-python cli.py --export --period all
-# Or simply (export is default):
-python cli.py --period all 
-
-# Export entries for a specific month (e.g., Feb 2025)
-python cli.py --export --period month --year 2025 --month 2
-
-# Export entries for today
-python cli.py --export --period day
- 
-# Export with verbose logging
-python cli.py --export --period week --date 2024-01-15 -v
-```
-
-### 2. Building the Index (Required for Querying)
-
-Before querying, you need to build a vector index from an exported JSON file. Run the `build_index.py` script.
-
-```bash
-# Build index from the default output/all_time.json file
-python build_index.py
-
-# Build index from a specific export file (e.g., Feb 2025)
-python build_index.py --input output/2025-02.json
-
-# Build index with verbose logging
-python build_index.py -v
-```
-This will create `index.faiss` and `index_mapping.json` in the project root.
-
-### 3. Querying Entries
-
-Once the index files exist, use the `--query` flag.
-
+Basic querying via `cli.py` is still available if the index is built:
 ```bash
 python cli.py --query "What did I do last weekend?"
-
-python cli.py --query "Summarize my main activities in February 2025"
-
-python cli.py --query "Any reflections on project X?"
 ```
 
 ## Example Implementation Plan for Cursor
 
-When working in Cursor, you can use these prompts to guide the implementation:
-
-1. "Create the basic project structure for notion-second-brain"
-2. "Implement the Notion API connection module"
-3. "Create the journal entry extraction functionality"
-4. "Implement date-based filtering for journal entries"
-5. "Build the JSON export module with time-period organization"
-6. "Create a CLI interface for the extraction process"
-7. "Add error handling and logging to the Notion API module"
-8. "Implement unit tests for the data extraction process"
+(This section can be updated for future feature development.)
 
 Remember to:
-- Use Cursor's AI features to help with implementation details
-- Create tasks for each component before implementing
-- Run tests frequently to verify functionality
-- Document your code and update the README as you progress
+- Use Cursor's AI features to help with implementation details.
+- Create tasks for each component before implementing.
+- Run tests frequently to verify functionality.
+- Document your code and update the README as you progress.
