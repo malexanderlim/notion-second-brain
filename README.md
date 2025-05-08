@@ -11,6 +11,7 @@ This project implements a full RAG pipeline that can:
 4. Allow selection from multiple Large Language Models (e.g., OpenAI GPT series, Anthropic Claude series).
 5. Provide token usage and estimated cost per query.
 6. Support advanced query features like metadata filtering and semantic search.
+7. Display the timestamp of the last synced journal entry in the UI.
 
 ## Technology Stack
 
@@ -28,16 +29,16 @@ Many of the initial phases outlined below have been completed or superseded by t
 - Functionality to connect to Notion, extract entries, and save them to JSON is implemented via `cli.py`.
 
 ### Phase 2: Data Processing and Storage - LARGELY COMPLETE
-- `build_index.py` handles processing exported JSON, creating embeddings, building the FAISS index (`index.faiss`), creating entry-to-index mappings (`index_mapping.json`), and caching metadata (`metadata_cache.json`).
+- `build_index.py` handles processing exported JSON, creating embeddings, building the FAISS index (`index.faiss`), creating entry-to-index mappings (`index_mapping.json`), and caching metadata (`metadata_cache.json`), and recording the timestamp of the latest processed entry (`last_entry_update_timestamp.txt`).
 
 ### Phase 3: Query Interface - LARGELY COMPLETE
 - `cli.py` provides basic CLI query functionality.
 - The FastAPI backend (`backend/main.py`, `backend/rag_query.py`) implements the full RAG pipeline, serving as the query engine for the web UI.
-- Features include model selection, token counting, cost estimation, metadata filtering, and semantic search.
+- Features include model selection, token counting, cost estimation, metadata filtering, semantic search, and retrieval of the last sync timestamp.
 
 ### Phase 4: Web Interface - LARGELY COMPLETE
 - A React/Vite/TypeScript frontend (`frontend/`) provides a chat-like UI to query the RAG system.
-- Users can select models, view answers, sources, and query cost information.
+- Users can select models, view answers, sources, query cost information, and see the date of the last synced journal entry.
 
 ## Implementation Plan
 
@@ -102,7 +103,7 @@ These steps assume you have Python 3, Node.js (with npm or yarn), and `git` inst
       ```bash
       python build_index.py 
       ```
-      This will process all `*.json` files in the `output/` directory by default and create `index.faiss`, `index_mapping.json`, and `metadata_cache.json` in the project root. Ensure `schema.json` is also present or correctly generated/placed in the root, as it's used by the RAG system.
+      This will process all `*.json` files in the `output/` directory by default and create `index.faiss`, `index_mapping.json`, `metadata_cache.json`, and `last_entry_update_timestamp.txt` in the project root. Ensure `schema.json` is also present or correctly generated/placed in the root, as it's used by the RAG system.
 
 6.  **Run the Backend Server:**
     - Ensure your Python virtual environment (created in step 2) is active.
@@ -135,7 +136,7 @@ These steps assume you have Python 3, Node.js (with npm or yarn), and `git` inst
 4.  Open the frontend URL in your browser.
 5.  Select your desired Language Model from the dropdown.
 6.  Type your query into the input box and press Enter or click "Query".
-7.  View the answer, sources, model details, and estimated cost.
+7.  View the answer, sources, model details, estimated cost, and the "Last Synced Entry" date.
 
 ### CLI Querying (Legacy/Alternative)
 

@@ -81,6 +81,10 @@ class QueryResponse(BaseModel):
     output_tokens: Optional[int] = None
     estimated_cost_usd: Optional[float] = None
 
+class LastUpdatedResponse(BaseModel):
+    last_updated_timestamp: Optional[str] = None
+    error: Optional[str] = None
+
 # --- API Endpoints ---
 
 @app.get("/", tags=["General"])
@@ -139,6 +143,40 @@ async def handle_query(request: QueryRequest):
         # Use logger for exceptions
         logger.error(f"Error processing query '{user_query[:50]}...': {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"An internal server error occurred while processing the query.")
+
+@app.get("/api/last-updated", response_model=LastUpdatedResponse, tags=["General"])
+def get_last_updated_timestamp():
+    """Retrieves the timestamp of the last successfully processed entry from the index build process."""
+    # The default path used in build_index.py. 
+    # Ensure this path is correct relative to where the backend server is run from.
+    # If build_index.py is at project root, and backend is in backend/, this path is relative to project root.
+    timestamp_file_path = "last_entry_update_timestamp.txt" # Assumes backend is run from project root
+    
+    # More robust path (if backend/main.py is run directly from backend/ directory):
+    # timestamp_file_path = os.path.join(os.path.dirname(__file__), "..", "last_entry_update_timestamp.txt")
+    # For now, sticking to the simpler path, assuming execution from project root for uvicorn.
+
+    logger.info(f"Attempting to read last updated timestamp from: {timestamp_file_path}")
+    
+    if not os.path.exists(timestamp_file_path):
+        logger.warning(f"Timestamp file not found: {timestamp_file_path}")
+        return LastUpdatedResponse(last_updated_timestamp=None, error="Timestamp file not found. Sync may not have run yet.")
+    
+    try:
+        with open(timestamp_file_path, 'r', encoding='utf-8') as f:
+            timestamp_str = f.read().strip()
+        
+        if not timestamp_str:
+            logger.warning(f"Timestamp file is empty: {timestamp_file_path}")
+            return LastUpdatedResponse(last_updated_timestamp=None, error="Timestamp file is empty.")
+
+        # Basic validation (could be more robust, e.g., regex or parse with datetime)
+        # datetime.fromisoformat(timestamp_str) # Uncomment to validate format strictly
+        logger.info(f"Successfully retrieved timestamp: {timestamp_str}")
+        return LastUpdatedResponse(last_updated_timestamp=timestamp_str)
+    except Exception as e:
+        logger.error(f"Error reading or parsing timestamp file {timestamp_file_path}: {e}", exc_info=True)
+        return LastUpdatedResponse(last_updated_timestamp=None, error=f"Error reading timestamp file: {str(e)}")
 
 # --- Optional: Add command to run the server easily ---
 # uvicorn backend.main:app --reload --port 8000

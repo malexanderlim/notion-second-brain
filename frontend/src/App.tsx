@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import axios from 'axios' // Import axios
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -37,6 +37,12 @@ interface QueryResponse {
   estimated_cost_usd?: number; // NEW
 }
 
+// NEW: Interface for the last updated timestamp response
+interface LastUpdatedApiResponse {
+  last_updated_timestamp: string | null;
+  error?: string | null;
+}
+
 // Constants for suggestion logic
 const RECENT_KEYWORDS = ["recently", "latest", "last time", "most recent"];
 const YEAR_REGEX = /\b(19|20)\d{2}\b/; // Matches 4-digit years starting 19 or 20
@@ -46,14 +52,24 @@ const SUGGESTION_MESSAGE = "Queries about recent events work best with a timefra
 const formatDate = (dateString: string | undefined): string => {
   if (!dateString) return 'Date not available';
   try {
-    // Attempt to create a valid date object. Handles YYYY-MM-DD.
-    const date = new Date(dateString + 'T00:00:00'); // Ensure parsing as local date, not UTC
+    // MODIFIED: Directly parse the ISO string without appending time.
+    const date = new Date(dateString);
     if (isNaN(date.getTime())) {
+      console.warn(`formatDate: Received invalid date string: ${dateString}`);
       return dateString; // Return original if invalid
     }
-    const options: Intl.DateTimeFormatOptions = { year: 'numeric', month: 'long', day: 'numeric' };
+    // Include time formatting options
+    const options: Intl.DateTimeFormatOptions = { 
+      year: 'numeric', 
+      month: 'long', 
+      day: 'numeric', 
+      hour: 'numeric', 
+      minute: '2-digit', 
+      // timeZoneName: 'short' // Optionally add timezone 
+    };
     return date.toLocaleDateString(undefined, options);
   } catch (e) {
+    console.error(`formatDate: Error parsing date string: ${dateString}`, e);
     return dateString; // Fallback to original string if date parsing fails
   }
 };
@@ -89,8 +105,31 @@ function App() {
   const [inputTokens, setInputTokens] = useState<number | null>(null);
   const [outputTokens, setOutputTokens] = useState<number | null>(null);
   const [estimatedCost, setEstimatedCost] = useState<number | null>(null);
+  // NEW: State for last updated timestamp
+  const [lastUpdatedInfo, setLastUpdatedInfo] = useState<{ timestamp: string | null; error: string | null; loading: boolean }>({ timestamp: null, error: null, loading: true });
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000"; // Use env var or default
+
+  // NEW: useEffect to fetch the last updated timestamp on mount
+  useEffect(() => {
+    const fetchLastUpdatedTimestamp = async () => {
+      try {
+        const result = await axios.get<LastUpdatedApiResponse>(`${backendUrl}/api/last-updated`);
+        if (result.data.error) {
+          setLastUpdatedInfo({ timestamp: null, error: result.data.error, loading: false });
+        } else if (result.data.last_updated_timestamp) {
+          setLastUpdatedInfo({ timestamp: result.data.last_updated_timestamp, error: null, loading: false });
+        } else {
+          setLastUpdatedInfo({ timestamp: null, error: "Timestamp not available.", loading: false });
+        }
+      } catch (err) {
+        console.error("Failed to fetch last updated timestamp:", err);
+        setLastUpdatedInfo({ timestamp: null, error: "Failed to fetch last updated data.", loading: false });
+      }
+    };
+
+    fetchLastUpdatedTimestamp();
+  }, [backendUrl]); // Depend on backendUrl in case it could change, though typically it won't post-mount
 
   // Function to check query and set suggestion if needed
   const checkAndSetSuggestion = (submittedQuery: string) => {
@@ -191,6 +230,19 @@ function App() {
       <div className="w-full max-w-2xl space-y-8">
         <h1 className="text-3xl font-bold text-center">Query Your Second Brain</h1>
         
+        {/* Last Updated Timestamp Display */}
+        <div className="text-center text-xs text-muted-foreground">
+          {lastUpdatedInfo.loading ? (
+            <span>Loading last updated info...</span>
+          ) : lastUpdatedInfo.error ? (
+            <span className="text-red-500">Error: {lastUpdatedInfo.error}</span>
+          ) : lastUpdatedInfo.timestamp ? (
+            <span>Last Synced Entry: {formatDate(lastUpdatedInfo.timestamp)}</span>
+          ) : (
+            <span>Last synced info not available.</span>
+          )}
+        </div>
+
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex gap-2 items-center w-full">
             <Input 

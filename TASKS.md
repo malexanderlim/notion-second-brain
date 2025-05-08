@@ -99,10 +99,48 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 - [ ] **Operationalization & Sync:**
   - [ ] Finalize strategy for ongoing synchronization (See `design/ROLLOUT_SYNC_PLAN_TDD.md`). Key considerations:
     - Confirm use of `last_edited_time` for detecting changes.
-    - Determine frequency of sync runs (e.g., daily, weekly, manual trigger).
+    - Determine frequency of sync runs (e.g., daily, weekly, manual trigger via UI).
     - Design robust error handling for sync failures.
     - Consider how to handle page deletions (remove from index?).
-  - [ ] Implement the chosen synchronization solution (likely involving scheduled runs of `cli.py --export-month` and `build_index.py`).
+  - [ ] Implement the chosen synchronization solution (invoking core export and indexing logic, e.g., via scheduled jobs or application-triggered events).
+  - [x] **Feature: Last Updated Timestamp for Frontend**
+    - [x] **Core Indexing Logic (`build_index.py` / equivalent):**
+      - [x] During initial full batched export/index:
+        - [x] Track max `last_edited_time` from each processed batch.
+        - [x] Determine overall max `last_edited_time` across all batches.
+        - [x] Store this overall max `last_edited_time` (e.g., in `last_entry_update_timestamp.txt` or KV store).
+      - [x] During incremental sync:
+        - [x] Track max `last_edited_time` from the current incremental batch of entries.
+        - [x] Update the stored overall max `last_edited_time` if the current batch's max is newer.
+    - [x] **Backend API (`backend/main.py` or similar):**
+      - [x] Create a new endpoint (e.g., `/api/sync-status` or `/api/last-updated`) to securely retrieve the stored "Last Processed Entry Timestamp".
+      - [x] Ensure the endpoint reads from the correct storage location (file or KV store).
+    - [x] **Frontend (`frontend/src/App.tsx`):**
+      - [x] Fetch the "Last Processed Entry Timestamp" from the new backend endpoint.
+      - [x] Display this timestamp in a user-friendly format (e.g., "Last Updated: January 21, 2025").
+      - [x] Handle cases where the timestamp might not be available yet (e.g., before first sync).
+  - [ ] **Feature: Manual Sync Trigger (Refresh Button - Incremental)**
+    - [ ] **Design:** Finalize simple incremental approach (e.g., export current month vs. track last sync time for `cli.py --since-timestamp`). For MVP, exporting current month is simpler.
+    - [ ] **Backend (`main.py` / new module?):**
+      - [ ] Create new POST endpoint `/api/trigger-sync`.
+      - [ ] Implement logic within endpoint to:
+        - [ ] Determine current year/month.
+        - [ ] Construct command `python cli.py --export-month YYYY-MM`.
+        - [ ] Run the export command using `subprocess.Popen` in the background (non-blocking).
+        - [ ] Construct command `python build_index.py` (no `--force-rebuild`).
+        - [ ] Run the index build command using `subprocess.Popen` after the export *should* have finished (or chain them if possible via shell, handling potential errors).
+        - [ ] Ensure commands use the correct Python environment (`sys.executable` or venv path).
+        - [ ] Immediately return a response like `{"status": "Sync process started"}`.
+      - [ ] Add basic error handling/logging for subprocess calls.
+    - [ ] **Frontend (`App.tsx`):**
+      - [ ] Add a "Refresh" `Button` component with an appropriate icon (e.g., `RefreshCw`).
+      - [ ] Add state variable `isRefreshing` (boolean) to manage loading state.
+      - [ ] Implement `handleRefresh` function:
+        - [ ] Set `isRefreshing` to true, disable button.
+        - [ ] Make POST request to `/api/trigger-sync`.
+        - [ ] Handle response (show a temporary notification like "Sync started..."?).
+        - [ ] After a short delay (e.g., `setTimeout`), or upon next query, re-fetch `/api/last-updated` to potentially show the new timestamp (since completion isn't tracked directly).
+        - [ ] Set `isRefreshing` to false after API call returns (or after a short delay).
 
 - [x] **Web Interface (Hyper-MVP):**
   - [ ] **Backend Setup:**
