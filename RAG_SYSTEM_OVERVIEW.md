@@ -14,11 +14,11 @@ graph TD
     D --> E[FAISS Vector Index (index.faiss)];
     D --> F[Entry Mapping (index_mapping.json)];
     D --> G[Metadata Cache (metadata_cache.json)];
-    H[User Query via Frontend UI] --> I{Backend API (FastAPI - Supports Model Selection)};
+    H[User Query via Frontend UI] --> I{Backend API (FastAPI - Modular RAG Backend)};
     I -- Uses --> E;
     I -- Uses --> F;
     I -- Uses --> G;
-    I -- Uses --> J[LLM Providers (OpenAI, Anthropic) for Embeddings & LLM Tasks];
+    I -- Uses --> J[LLM Providers (OpenAI, Anthropic)];
     I --> K[Answer with Cost & Model Info to Frontend UI];
 ```
 
@@ -31,13 +31,18 @@ graph TD
     -   `metadata_cache.json`: Stores unique values for filterable metadata fields (e.g., all unique names in 'Family', all unique tags in 'Tags') to aid query analysis.
     -   `schema.json`: A representation of the Notion database schema, detailing property names and types.
     -   `last_entry_update_timestamp.txt`: A text file storing the ISO timestamp of the most recently processed entry during the last successful run of `build_index.py`. This is used by the frontend to display when the data was last synced.
--   **Backend API (`backend/main.py`, `backend/rag_query.py`):**
-    -   Built with FastAPI.
+-   **Backend API (`backend/`):**
+    -   **Entry Point (`backend/main.py`):** FastAPI application handling HTTP requests, responses, CORS, and basic API structure. Initializes shared RAG state via `rag_initializer` on startup.
+    -   **RAG Orchestrator (`backend/rag_query.py`):** Contains the main `perform_rag_query` function which orchestrates the entire RAG pipeline by calling specialized modules. Accesses shared state (clients, index, data) dynamically from `rag_initializer`. Includes `execute_rag_query_sync` wrapper for CLI use.
+    -   **Shared State Manager (`backend/rag_initializer.py`):** Loads and holds shared components (FAISS index, mappings, metadata, schema, LLM clients) as module globals. Provides functions for initialization, accessed by entry points and other modules.
+    -   **Query Analyzer (`backend/query_analyzer.py`):** Handles LLM calls to analyze the user query and extract structured filters (date ranges, metadata).
+    -   **Retrieval Logic (`backend/retrieval_logic.py`):** Handles embedding generation, FAISS searching, and applying metadata filters (including fallback logic).
+    -   **LLM Interface (`backend/llm_interface.py`):** Handles interaction with different LLM providers (OpenAI, Anthropic) for final answer generation.
+    -   **Prompt Constructor (`backend/prompt_constructor.py`):** Assembles the final prompts for the LLM based on context, query type, and fallback status.
+    -   **Cost Utility (`backend/cost_utils.py`):** Calculates estimated query cost based on token usage across different steps.
+    -   **Configuration (`backend/rag_config.py`):** Defines constants, file paths, default models, and the `MODEL_CONFIG` dictionary (model properties, providers, pricing).
     -   Provides an endpoint (e.g., `/api/query`) to receive user queries, including an optional `model_name` for selecting the LLM.
     -   Provides an endpoint (`/api/last-updated`) to retrieve the timestamp from `last_entry_update_timestamp.txt`.
-    -   Contains the core RAG processing logic (`perform_rag_query` in `rag_query.py`) and orchestrates the process.
-    -   Includes a synchronous wrapper (`execute_rag_query_sync` in `rag_query.py`) used by `cli.py` for querying.
-    -   Contains `MODEL_CONFIG` defining available models, their API IDs, providers, and pricing.
 -   **LLM Providers (OpenAI, Anthropic):** Used for generating text embeddings (e.g., OpenAI's `text-embedding-ada-002`) and for powering Large Language Model (LLM) calls (e.g., OpenAI's `gpt-4o`, `gpt-4o-mini`, Anthropic's `claude-3-5-haiku-20241022`) for query analysis and final answer generation.
 -   **Frontend UI (`frontend/src/App.tsx`):**
     -   React/Vite/TypeScript application.
@@ -70,106 +75,60 @@ graph TD
 
 ## 3. Backend API Query Flow
 
-The primary logic resides in `backend/rag_query.py` (`perform_rag_query` function), orchestrated by `backend/main.py` which handles the API request/response cycle.
-
-**Note:** The `cli.py --query` command now utilizes this same core RAG logic by calling a synchronous wrapper function (`execute_rag_query_sync`) within `backend/rag_query.py`.
+The main orchestration happens in `backend/rag_query.py` (`perform_rag_query`), called by `backend/main.py` for API requests or `cli.py` (via `execute_rag_query_sync`) for command-line queries. Shared state like clients and loaded data is managed by `backend/rag_initializer.py`.
 
 ### 3.1. Request Reception & Initialization
 
--   The FastAPI app in `main.py` receives a POST request to `/api/query` with a JSON body like `{"query": "user's question", "model_name": "optional_model_key"}`.
--   On startup, `main.py` calls `load_rag_data()` (from `rag_query.py`) to load `index.faiss`, `index_mapping.json`, `metadata_cache.json`, and `schema.json` into global variables. It also initializes the OpenAI and Anthropic clients based on available API keys. The `MODEL_CONFIG` (defining model properties, API IDs, providers, and costs) is also available in `rag_query.py`.
--   The backend also provides a GET endpoint `/api/last-updated` which reads the `last_entry_update_timestamp.txt` file (located in the project root) and returns its content.
+-   The FastAPI app (`main.py`) receives a POST request to `/api/query` with `{"query": "...", "model_name": "..."}`.
+-   On startup, `main.py` calls functions in `rag_initializer.py` to load data (index, mapping, metadata, schema) and initialize LLM clients (OpenAI, Anthropic) based on API keys. These are stored as globals within `rag_initializer`.
+-   `rag_config.py` holds static configuration like `MODEL_CONFIG`.
+-   The `/api/last-updated` endpoint reads `last_entry_update_timestamp.txt`.
 
-### 3.2. Query Analysis (`analyze_query_for_filters` in `rag_query.py`)
+### 3.2. Query Analysis (`query_analyzer.py`)
 
--   **Goal:** Convert the natural language user query into structured filters.
--   **Process:**
-    1.  The user query is sent to an LLM (e.g., `gpt-4o`, as specified by `DEFAULT_QUERY_ANALYSIS_MODEL_KEY` in `MODEL_CONFIG`).
-    2.  The LLM prompt includes:
-        -   The user's query.
-        -   The current date (e.g., "Today's date is YYYY-MM-DD...") to aid in parsing relative date expressions (e.g., "last 6 months", "next week").
-        -   The database schema from `schema.json` (property names and types).
-        -   Distinct values from `metadata_cache.json` for relevant fields (e.g., known names in "Family", known tags in "Tags") to help the LLM map query terms accurately.
-    3.  The LLM is instructed to output a JSON object containing:
-        -   An optional `date_range` key with `start` and `end` sub-keys (in "YYYY-MM-DD" format).
-        -   An optional `filters` key, which is a list of objects. Each object has:
-            -   `field`: The Notion property name (e.g., "Family", "Tags").
-            -   `contains`: The value extracted from the query (e.g., "Leo", "restaurant").
-        -   The LLM is guided to map person names to "Family" or "Friends" fields. If a name could be in either, it may suggest filters for both.
--   **Output:** A dictionary including `filters`, `input_tokens`, `output_tokens`, and any `error`. Token usage for this step is tracked.
+-   **Goal:** Convert natural language query to structured filters.
+-   **Process:** Orchestrated by `rag_query.py`.
+    1.  `rag_query.py` calls `analyze_query_for_filters` in `query_analyzer.py`.
+    2.  `query_analyzer.py` accesses the initialized `openai_client`, `schema_properties`, and `distinct_metadata_values` from `rag_initializer`.
+    3.  It constructs a prompt (including current date, schema, distinct values) and sends the user query to the configured query analysis LLM (e.g., `gpt-4o`).
+    4.  The LLM returns a JSON containing optional `date_range` and `filters` list.
+-   **Output:** `query_analyzer.py` returns a dictionary to `rag_query.py` with the extracted `filters`, token counts, and any errors.
 
-### 3.3. Pre-filtering Candidate Entries (`perform_rag_query` in `rag_query.py`)
+### 3.3. Pre-filtering Candidate Entries (`retrieval_logic.py`)
 
--   **Goal:** Narrow down the search space from all journal entries to a relevant subset *before* performing expensive semantic search.
--   **Process:**
-    1.  Starts with `current_candidates` as a list of all entries from `mapping_data_list` (loaded from `index_mapping.json`). Each entry dictionary contains its `faiss_index`, `entry_date` (as a Python `date` object after loading), and other metadata.
-    2.  **Date Filter:** If `filter_analysis` provided a `date_range`, `current_candidates` are filtered to include only entries whose `entry_date` falls within this range.
-    3.  **Other Metadata Filters (e.g., Tags):**
-        -   Filters from `filter_analysis` that are *not* name-related (e.g., `{"field": "Tags", "contains": "restaurant"}`) are applied next.
-        -   This typically involves checking if the `contains` value is present in the corresponding list-based metadata field of an entry (e.g., `entry['Tags']`). Logic is case-insensitive.
-        -   `current_candidates` is updated.
-        -   *(Future Enhancement: A "Tag Fallback Mechanism" is planned here. If this step results in zero candidates and tag filters were active, it would revert `current_candidates` to its state before tag filtering and set a flag.)*
-    4.  **Name Filters (`Family`, `Friends`):**
-        -   Filters specifically for configured name fields (e.g., "Family", "Friends") are applied.
-        -   An OR logic is used: an entry matches if it matches *any* of the active name filters (e.g., Family contains "Leo" OR Friends contains "Leo").
-        -   This also checks if the `contains` value is present in the list-based name field of an entry.
-        -   `current_candidates` is updated.
-    5.  **Name Filter Fallback Logic:**
-        -   A copy of `current_candidates` is stored *before* applying the name filters (let's call this `candidates_before_name_filter`).
-        -   If, after applying name filters, `current_candidates` becomes empty AND name filters were active:
-            -   `current_candidates` is reverted to `candidates_before_name_filter`.
-            -   A flag `fallback_triggered_due_to_names` is set to `True`.
-            -   This ensures that if a name isn't explicitly tagged, the system can still search a broader set of entries (filtered by date and other tags) for mentions of that name in the content.
-    6.  **Final Candidate Indices:** The `faiss_index` values from the final `current_candidates` list are collected. If this list is empty, a "no matching entries" message is prepared.
+-   **Goal:** Narrow the search space using metadata.
+-   **Process:** Orchestrated by `rag_query.py`.
+    1.  `rag_query.py` calls `apply_metadata_filters` in `retrieval_logic.py`, passing the full entry list (from `rag_initializer.mapping_data_list`), the `filter_analysis` results, and distinct values (from `rag_initializer.distinct_metadata_values`).
+    2.  `apply_metadata_filters` performs sequential filtering based on date range, other metadata (tags), and names, implementing the OR logic for names and the fallback mechanisms for tags and names if initial filtering yields zero results.
+-   **Output:** `apply_metadata_filters` returns a dictionary to `rag_query.py` containing the final list of candidate entries for counting, the count itself, and various flags indicating active filters and whether fallbacks were triggered.
 
-### 3.4. Semantic Search (`perform_rag_query`)
+### 3.4. Semantic Search (`retrieval_logic.py`)
 
--   **If Candidate Indices Exist:**
-    1.  **Query Embedding:** The original user query string is sent to an OpenAI embedding model (e.g., `text-embedding-ada-002` via `get_embedding`, configured in `MODEL_CONFIG`) to get its vector embedding. Token usage for this step is tracked.
-    2.  **FAISS Search:**
-        -   A `faiss.IDSelectorBatch` is created using the `final_candidate_faiss_indices`.
-        -   The FAISS `index.search()` method is called, searching for the `query_embedding` within the subset of vectors specified by the `IDSelectorBatch`.
-        -   It retrieves the top `k` (configurable, e.g., `TOP_K = 15`) most similar FAISS indices and their distances. `k` is capped by the number of actual candidate indices.
--   **Output:** A list of FAISS indices of the most relevant entries from the pre-filtered set.
+-   **If Candidate Indices Exist:** Orchestrated by `rag_query.py`.
+    1.  **Query Embedding:** `rag_query.py` calls `get_embedding` in `retrieval_logic.py` to get the query vector using the OpenAI client from `rag_initializer`.
+    2.  **FAISS Search:** `rag_query.py` calls `perform_faiss_search` in `retrieval_logic.py`, passing the query vector, the FAISS index (from `rag_initializer.index`), and an `IDSelectorBatch` created from the candidate indices identified in step 3.3.
+-   **Output:** `perform_faiss_search` returns the top `k` FAISS indices and distances to `rag_query.py`.
 
-### 3.5. Context Retrieval (`perform_rag_query`)
+### 3.5. Context Retrieval (`rag_query.py`)
 
--   For each FAISS index retrieved from the search:
-    1.  The full entry data (including `title`, `content`, `entry_date`, `page_id`) is looked up from the global `index_to_entry` dictionary (which was derived from `index_mapping.json`).
-    2.  A context string is constructed for each entry, typically including its ID, title, date, and full content. Example: `Document (ID: {faiss_idx}, Title: {title}, Date: {entry_date_str}):\n{content}\n---`
-    3.  Information for the "Sources Used" list is also prepared:
-        -   `title`: Entry title.
-        -   `url`: Notion URL. This is constructed on-the-fly using the `page_id` (e.g., `https://www.notion.so/{page_id_without_hyphens}`) if not already present in the entry data.
-        -   `id`: The `faiss_idx` (or `page_id`).
-        -   `date`: The `entry_date_str` ("YYYY-MM-DD").
-        -   `distance`: (Optional) Semantic distance from FAISS search.
--   All context strings are combined into a single large string to be passed to the final LLM.
+-   This logic remains within `rag_query.py`.
+-   It uses the retrieved FAISS indices to look up the corresponding entry data (title, content, date, page_id) from `rag_initializer.index_to_entry`.
+-   It constructs context strings for the LLM and prepares the `sources` list for the final response, generating Notion URLs from `page_id`s.
 
-### 3.6. Final Answer Generation (LLM - `perform_rag_query`)
+### 3.6. Final Answer Generation (LLM - `llm_interface.py`)
 
--   **Goal:** Generate a human-readable, narrative answer based on the retrieved context and the user's original query, using the user-selected (or default) model.
--   **Process:**
-    1.  The `model_name` from the API request (or `DEFAULT_FINAL_ANSWER_MODEL_KEY`) is used to look up the model's details (including `api_id`, `provider`, and costs) from `MODEL_CONFIG`.
-    2.  The appropriate LLM client (OpenAI or Anthropic) is selected based on the model's provider.
-    3.  A prompt is constructed for the selected LLM. This prompt includes:
-        -   **`base_system_message`:** Sets the persona and overall style. The specific base message varies based on the query type:
-            -   **General Queries:** "You are an AI assistant functioning as a 'Second Brain.' Your purpose is to help the user recall and synthesize information from their journal entries. Respond in a natural, reflective, and narrative style. Organize your answers clearly, often using bolded thematic titles to highlight key memories or points, each followed by descriptive details. Cite specific journal entries when you draw information from them, as per the detailed formatting instructions provided."
-            -   **Quantitative Person Queries (e.g., "How many times did I see X?"):** A specialized template is used. It first states the `metadata_based_interaction_count` for the person, then instructs the LLM to provide a narrative summary using exemplar documents.
-            -   **Quantitative Tag Queries (e.g., "How many times did I cook?"):** A similar specialized template is used. It first states the `metadata_based_interaction_count` for the tag/activity, then instructs the LLM to provide a narrative summary using exemplar documents.
-        -   **`formatting_instructions`:** Provides detailed rules for answer structure and citation.
-            -   Emphasis on narrative flow, introduction, bolded thematic sections, and a conclusion.
-            -   Specific citation style: `[Title of Entry](Notion URL) (Formatted Date)` (e.g., `(January 7, 2025)`), with the LLM expected to naturally hyperlink the title and append the formatted date.
-            -   For quantitative person/tag queries, instructions explicitly guide the LLM to state the count first.
-        -   **Context String:** The combined content from all retrieved documents (exemplars).
-        -   **User Query:** The original user query.
-    2.  **Fallback Prompt Modification:** If `fallback_triggered_due_to_names` or `fallback_triggered_due_to_tags` is true, the `final_system_prompt` is prepended with a message informing the LLM that the initial metadata search failed and the context is from a broader search, instructing it to specifically look for the named individuals or concepts in the content.
--   **Output:** The LLM's generated text response. Token usage (input and output) for this final generation step is tracked. The total estimated cost for the query (summing embedding, query analysis, and final answer generation tokens) is calculated using pricing from `MODEL_CONFIG`.
+-   **Goal:** Generate the narrative answer using the selected model.
+-   **Process:** Orchestrated by `rag_query.py`.
+    1.  `rag_query.py` uses the `model_name` to get configuration from `MODEL_CONFIG`.
+    2.  It calls `construct_final_prompts` (from `prompt_constructor.py`) to assemble the system and user prompts, incorporating retrieved context and flags (e.g., fallback status, query type).
+    3.  It calls `generate_final_answer` in `llm_interface.py`, passing the prompts and model config.
+    4.  `llm_interface.py` accesses the appropriate client (OpenAI or Anthropic) via `rag_initializer`, makes the API call using `asyncio.to_thread`, and returns the text answer, token counts, and any errors.
+-   **Output:** `llm_interface.py` returns the generated text, tokens, and error status to `rag_query.py`. `rag_query.py` then calls `calculate_estimated_cost` (from `cost_utils.py`) to get the final cost.
 
 ### 3.7. Response Serialization & Return (`backend/main.py`)
 
--   The `handle_query` function in `main.py` receives a dictionary from `perform_rag_query` containing the `answer`, `sources_data`, `model_used`, `model_api_id_used`, `model_provider_used`, `input_tokens`, `output_tokens`, and `estimated_cost_usd`.
--   It validates each item in `sources_data` and converts it into a `SourceDocument` Pydantic model instance.
--   The final response is structured using the `QueryResponse` Pydantic model, which now includes all the above fields, and sent back to the frontend as JSON.
+-   `rag_query.py` returns the final result dictionary (answer, sources, model info, tokens, cost) to `main.py`.
+-   `main.py` validates and serializes this using Pydantic models (`QueryResponse`, `SourceDocument`) and sends the JSON response back to the client.
 
 ## 4. Frontend UI (`frontend/src/App.tsx`)
 

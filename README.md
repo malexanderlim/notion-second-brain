@@ -15,7 +15,7 @@ This project implements a full RAG pipeline that can:
 
 ## Technology Stack
 
-- **Backend**: Python, FastAPI
+- **Backend**: Python, FastAPI (with a modular structure: `rag_initializer`, `rag_query`, `query_analyzer`, `retrieval_logic`, `llm_interface`, etc.)
 - **Data Processing & Indexing**: Python, `requests`, `faiss-cpu`, `openai` (for embeddings)
 - **LLM Integration**: OpenAI API, Anthropic API
 - **Frontend**: React (Vite + TypeScript), Tailwind CSS, shadcn/ui, axios
@@ -141,13 +141,17 @@ These steps assume you have Python 3, Node.js (with npm or yarn), and `git` inst
 ### CLI Querying (Legacy/Alternative)
 
 Basic querying via `cli.py` is still available if the index is built:
-+The CLI query function now uses the same advanced RAG engine as the web UI (`backend/rag_query.py`). You can also specify a model using the `--model` flag.
-+
+-The CLI query function now uses the same advanced RAG engine as the web UI (`backend/rag_query.py`). You can also specify a model using the `--model` flag.
+-
  ```bash
  python cli.py --query "What did I do last weekend?"
-+
+-
+-# Example using a specific model:
+-python cli.py --query "Tell me about my umeshu project" --model claude-3-5-haiku-20241022
++```bash
++python cli.py --query "What did I do last weekend?"
 +# Example using a specific model:
-+python cli.py --query "Tell me about my umeshu project" --model claude-3-5-haiku-20241022
++python cli.py --query "Tell me about my umeshu project" --model claude-3-haiku-20240307
  ```
  
  ## Example Implementation Plan for Cursor

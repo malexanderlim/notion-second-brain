@@ -21,14 +21,15 @@ from notion_second_brain import config # To check if config loaded ok
 from notion_second_brain.data_exporter import handle_export as run_export_action # New import
 # from notion_second_brain.rag_pipeline import handle_query as run_query_action # Removed old import
 
-# New imports for consolidated RAG logic
-from backend.rag_query import (
-    execute_rag_query_sync as run_query_action, 
-    initialize_openai_client, 
-    initialize_anthropic_client, 
+# Imports for RAG logic and initialization
+from backend.rag_query import execute_rag_query_sync as run_query_action
+from backend.rag_initializer import (
     load_rag_data,
-    DEFAULT_FINAL_ANSWER_MODEL_KEY # Import default model for help text
+    initialize_openai_client,
+    initialize_anthropic_client
 )
+# DEFAULT_FINAL_ANSWER_MODEL_KEY can be imported from rag_config if needed for help text
+from backend.rag_config import DEFAULT_FINAL_ANSWER_MODEL_KEY
 
 # --- RAG Constants --- # MOVED to rag_pipeline.py
 # INDEX_FILE = "index.faiss"
