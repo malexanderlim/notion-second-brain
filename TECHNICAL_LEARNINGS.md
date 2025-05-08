@@ -31,6 +31,10 @@ This document captures key technical insights and evolution during the developme
 *   **Query Analysis Nuances:**
     *   Requires careful prompt engineering to map natural language terms (names, relative dates, keywords) to the correct schema fields.
     *   Providing known distinct values (from a cache or the mapping data) significantly improves the LLM's ability to map query terms (like names) accurately to the correct fields (e.g., "Ron Lim" -> `Family`).
+    *   **Managing "Known Values" in Prompts:** When providing lists of known values (e.g., all friends, all tags) directly in the query analysis prompt:
+        *   **Signal vs. Noise:** Excessively long lists can act as "noise," making it harder for the LLM to identify the correct specific value mentioned in the user's query, even if that value is present in the list. The desired "signal" (the specific value) gets diluted.
+        *   **Token Limits & Focus:** Very long lists also consume more tokens and can strain the LLM's ability to focus on all parts of the prompt effectively.
+        *   **Dynamic Sizing:** A strategy is to dynamically adjust the number of examples shown for "known values" based on the field type. For instance, show a smaller number of examples (e.g., 10-20) for fields with potentially very long lists of unique values (like `Friends`), especially if alphabetical sorting can bring common matches to the forefront. For other fields (like `Tags`), a larger number of examples might be more beneficial. This helps balance providing enough context without overwhelming the model.
 
 ## 5. Data Handling & Consistency
 

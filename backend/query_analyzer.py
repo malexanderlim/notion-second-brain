@@ -71,7 +71,13 @@ async def analyze_query_for_filters(query: str, query_analysis_model_key: str, *
             if current_distinct_metadata_values and name in current_distinct_metadata_values:
                 known_values = current_distinct_metadata_values.get(name, set()) # Ensure it's a set or empty set
                 if known_values and isinstance(known_values, set): # Double check it's a set
-                    max_values_to_show = 50
+                    if name in ["Family", "Friends"]:
+                        max_values_to_show = 15 # Reduced for Family/Friends
+                    elif name == "Tags":
+                        max_values_to_show = 50 # Keep higher for Tags
+                    else:
+                        max_values_to_show = 20 # Default for other fields
+                    
                     # Sort for consistent prompting, convert set to list first
                     sorted_known_values = sorted(list(known_values))
                     values_str = ", ".join(sorted_known_values[:max_values_to_show])
@@ -87,8 +93,9 @@ async def analyze_query_for_filters(query: str, query_analysis_model_key: str, *
         "You are a query analysis assistant. Your task is to analyze the user query and the available Notion database fields "
         "(including known values for some fields) to extract structured filters. Identify potential entities like names, tags, dates, or date ranges mentioned in the query "
         "and map them to the most relevant field based on the provided schema AND the known values. Format the output as a JSON object. "
-        "Recognize date ranges (like 'last year', '2024', 'next month', 'June 2023'). For date ranges, output a 'date_range' key "
-        "with 'start' and 'end' sub-keys in 'YYYY-MM-DD' format. For specific field value filters, output a 'filters' key containing "
+        "Recognize date ranges (like 'last year', '2024', 'next month', 'June 2023', or specific start/end dates). For date ranges, output a 'date_range' key "
+        "with 'start' and 'end' sub-keys in 'YYYY-MM-DD' format. **For a single year like \'in 2024\', this means start: \'2024-01-01\' and end: \'2024-12-31\'.** "
+        "For specific field value filters, output a 'filters' key containing "
         "a list of objects, where each object has 'field' (the Notion property name) and 'contains' (the value extracted from the query). "
         "**Important:** Names of people are typically found in the 'Family' (relation) or 'Friends' (relation) fields. Use the 'Known values' list provided for these fields to help map names accurately. Map person names to THESE fields unless the query specifically asks about the entry\'s title (the 'Name' field). "
         "If a name could belong to either 'Family' or 'Friends' based on known values or context, include filters for BOTH fields. "
