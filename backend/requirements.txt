@@ -9,4 +9,7 @@ faiss-cpu
 anthropic
 
 # CORS
-fastapi-cors 
+fastapi-cors
+
+# For file uploads (e.g., for transcription)
+python-multipart 

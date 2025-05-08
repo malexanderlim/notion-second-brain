@@ -1,11 +1,11 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import axios from 'axios' // Import axios
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
-import { LoaderCircle, X, Info, CalendarDays, Link as LinkIcon, WandSparkles } from 'lucide-react'; // Added WandSparkles for model
+import { LoaderCircle, X, Info, CalendarDays, Link as LinkIcon, WandSparkles, Mic, Square, MicOff, ArrowUpCircle } from 'lucide-react'; // Added ArrowUpCircle
 import ReactMarkdown from 'react-markdown'; // Import ReactMarkdown
 import {
   Select,
@@ -87,7 +87,7 @@ const AVAILABLE_MODELS = [
   { value: "claude-3-opus-20240229", label: "Anthropic Claude 3 Opus (Powerful, complex tasks, 200K context)" },
   { value: "claude-3-5-haiku-20241022", label: "Anthropic Claude 3.5 Haiku (Fastest, 200K context)" },
 ];
-const DEFAULT_MODEL = AVAILABLE_MODELS[0].value; // Default to GPT-4o
+const DEFAULT_MODEL = "gpt-4o-mini"; // Default to GPT-4o mini
 
 function App() {
   const [query, setQuery] = useState<string>("");
@@ -107,6 +107,19 @@ function App() {
   const [estimatedCost, setEstimatedCost] = useState<number | null>(null);
   // NEW: State for last updated timestamp
   const [lastUpdatedInfo, setLastUpdatedInfo] = useState<{ timestamp: string | null; error: string | null; loading: boolean }>({ timestamp: null, error: null, loading: true });
+
+  // NEW: State variables for voice input
+  const [isRecording, setIsRecording] = useState<boolean>(false);
+  const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
+  const [transcriptionError, setTranscriptionError] = useState<string | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]); // Use ref for synchronous updates
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null); // Ref to store MediaRecorder instance
+  const [recordingTime, setRecordingTime] = useState<number>(0); // State for recording timer
+  const timerIntervalRef = useRef<number | null>(null); // Ref for timer interval ID
+  const autoStopRecordTimeoutRef = useRef<number | null>(null); // Ref for auto-stop timeout
+  const isCancelledRef = useRef<boolean>(false);
+
+  const MAX_RECORDING_MS = 30000; // 30 seconds maximum recording time
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000"; // Use env var or default
 
@@ -144,48 +157,187 @@ function App() {
     }
   };
 
-  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
-    event.preventDefault(); // Prevent default form submission
-    if (!query.trim() || isLoading) return; // Don't submit if empty or already loading
+  const handleToggleRecording = async () => {
+    setTranscriptionError(null); // Clear previous transcription errors
 
-    const submittedQuery = query; // Store query before resetting
+    if (isRecording) {
+      // Stop recording
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+        isCancelledRef.current = false; // Ensure cancel flag is false for normal stop
+        mediaRecorderRef.current.stop();
+        // The onstop event will handle processing the audio
+      }
+      if (timerIntervalRef.current) {
+        clearInterval(timerIntervalRef.current);
+        timerIntervalRef.current = null;
+      }
+      setIsRecording(false);
+      // Note: recordingTime is not reset here, it shows the final duration until next recording
+    } else {
+      // Start recording
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const recorder = new MediaRecorder(stream);
+        mediaRecorderRef.current = recorder;
+        audioChunksRef.current = [];
+        setRecordingTime(0);
+        isCancelledRef.current = false;
+
+        recorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            audioChunksRef.current.push(event.data);
+          }
+        };
+
+        recorder.onstop = async () => {
+          // Stop all tracks on the stream to turn off the microphone indicator
+          stream.getTracks().forEach(track => track.stop());
+          setIsRecording(false);
+          if (timerIntervalRef.current) {
+            clearInterval(timerIntervalRef.current);
+            timerIntervalRef.current = null;
+          }
+          if (autoStopRecordTimeoutRef.current) {
+            clearTimeout(autoStopRecordTimeoutRef.current);
+            autoStopRecordTimeoutRef.current = null;
+          }
+
+          if (isCancelledRef.current) {
+            console.log("Recording cancelled by user.");
+            audioChunksRef.current = []; // Use ref to clear chunks
+            // setIsTranscribing(false); // Already handled by isRecording change
+            return;
+          }
+
+          // Proceed with transcription only if not cancelled
+          console.log("Recording stopped, processing audio chunks...");
+
+          if (audioChunksRef.current.length === 0) {
+            console.warn("No audio chunks recorded.");
+            setTranscriptionError("No audio was recorded. Please try again.");
+            return;
+          }
+
+          const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorderRef.current?.mimeType || 'audio/webm' });
+          audioChunksRef.current = []; // Clear chunks in ref after creating blob
+
+          setIsTranscribing(true);
+          setTranscriptionError(null);
+
+          const formData = new FormData();
+          formData.append("file", audioBlob, "voice_query.webm"); // Filename can be fixed or dynamic
+
+          try {
+            const transcribeResponse = await axios.post<{ transcription: string, error?: string }>(
+              `${backendUrl}/api/transcribe`,
+              formData,
+              {
+                headers: { 'Content-Type': 'multipart/form-data' }
+              }
+            );
+
+            if (transcribeResponse.data.error) {
+              setTranscriptionError(transcribeResponse.data.error);
+            } else if (transcribeResponse.data.transcription) {
+              const transcribedText = transcribeResponse.data.transcription;
+              setQuery(transcribedText); // Populate input field
+              // Auto-submit the transcribed query
+              if (transcribedText.trim()) {
+                performQuerySubmission(transcribedText, selectedModel);
+              }
+            }
+          } catch (err: any) {
+            console.error("Transcription API Error:", err);
+            let errorMessage = "Failed to transcribe audio.";
+            if (axios.isAxiosError(err) && err.response) {
+              errorMessage = err.response.data?.detail || err.message || errorMessage;
+            }
+            setTranscriptionError(errorMessage);
+          } finally {
+            setIsTranscribing(false);
+            setTranscriptionError(null);
+            audioChunksRef.current = []; // Clear ref
+            setRecordingTime(0);
+          }
+        };
+
+        mediaRecorderRef.current.start();
+        setIsRecording(true);
+
+        // Start timer
+        timerIntervalRef.current = window.setInterval(() => {
+          setRecordingTime((prevTime) => prevTime + 1);
+        }, 1000);
+
+        // Set timeout to automatically stop recording after MAX_RECORDING_MS
+        autoStopRecordTimeoutRef.current = window.setTimeout(() => {
+          if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+            console.log(`Auto-stopping recording after ${MAX_RECORDING_MS / 1000} seconds.`);
+            mediaRecorderRef.current.stop(); // This will trigger the onstop event
+            // No need to set isCancelledRef.current = false here, as it's an auto-stop not a send action
+          }
+        }, MAX_RECORDING_MS);
+
+      } catch (err) {
+        console.error("Error accessing microphone:", err);
+        setTranscriptionError("Microphone access denied or microphone not found. Please check permissions.");
+        setIsRecording(false); // Ensure recording state is false if permission fails
+      }
+    }
+  };
+
+  const handleCancelRecording = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+      isCancelledRef.current = true; // Set cancel flag
+      mediaRecorderRef.current.stop(); // This will trigger onstop
+    }
+    // Clear auto-stop timeout if cancel is pressed before it fires
+    if (autoStopRecordTimeoutRef.current) {
+      clearTimeout(autoStopRecordTimeoutRef.current);
+      autoStopRecordTimeoutRef.current = null;
+    }
+    // Reset states immediately as onstop might have a slight delay or conditions
+    setIsRecording(false);
+    setIsTranscribing(false);
+    setTranscriptionError(null);
+    audioChunksRef.current = []; // Clear ref
+    setRecordingTime(0);
+    setQuery(""); // Clear query input on cancel
+  };
+
+  // NEW: Extracted function for actual query submission logic
+  const performQuerySubmission = async (queryToSubmit: string, modelForQuery: string) => {
+    if (!queryToSubmit.trim()) return; // Don't submit if empty
 
     setIsLoading(true);
     setError(null);
     setResponse(null);
-    setSuggestion(null); // Reset suggestion on new submission
-    setModelUsedInResponse(null); // NEW: Reset model used on new submission
-    // NEW: Reset additional details on new submission
+    // setSuggestion(null); // Suggestion is typically set after submission attempt
+    setModelUsedInResponse(null);
     setModelApiIdUsed(null);
     setModelProviderUsed(null);
     setInputTokens(null);
     setOutputTokens(null);
     setEstimatedCost(null);
+    // Reset voice input states as well, in case a voice query led here
+    setIsRecording(false);
+    setIsTranscribing(false);
+    setTranscriptionError(null);
 
     try {
       const result = await axios.post<QueryResponse>(
         `${backendUrl}/api/query`,
         { 
-          query: submittedQuery,
-          model_name: selectedModel // NEW: Send selectedModel as model_name
+          query: queryToSubmit,
+          model_name: modelForQuery
         },
         {
           headers: { 'Content-Type': 'application/json' }
         }
       );
-      // --- MODIFIED DEBUGGING ---
-      console.log("Axios raw result.data:", result.data); 
-      if (result.data.sources && result.data.sources.length > 0) {
-        console.log("First source object from Axios:", result.data.sources[0]);
-        console.log("Does first source have 'date' property?", result.data.sources[0].hasOwnProperty('date'));
-      }
-      // --- END DEBUGGING ---
+      console.log("Axios raw result.data:", result.data);
       setResponse(result.data);
-      // NEW: Set the model used from the response
-      if (result.data.model_used) {
-        setModelUsedInResponse(result.data.model_used);
-      }
-      // NEW: Set additional details from response
+      if (result.data.model_used) setModelUsedInResponse(result.data.model_used);
       if (result.data.model_api_id_used) setModelApiIdUsed(result.data.model_api_id_used);
       if (result.data.model_provider_used) setModelProviderUsed(result.data.model_provider_used);
       if (result.data.input_tokens !== undefined) setInputTokens(result.data.input_tokens);
@@ -195,7 +347,6 @@ function App() {
       console.error("API Error:", err);
       let errorMessage = "Failed to fetch response from the backend.";
       if (axios.isAxiosError(err) && err.response) {
-        // Extract error detail from backend if available
         errorMessage = err.response.data?.detail || err.message || errorMessage;
       } else if (err instanceof Error) {
         errorMessage = err.message;
@@ -203,8 +354,14 @@ function App() {
       setError(errorMessage);
     } finally {
       setIsLoading(false);
-      checkAndSetSuggestion(submittedQuery); // Check for suggestion after request finishes
+      checkAndSetSuggestion(queryToSubmit); // Check for suggestion after request finishes
     }
+  };
+
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault(); // Prevent default form submission
+    if (isLoading || isRecording || isTranscribing) return; // Don't submit if already loading/recording/transcribing
+    performQuerySubmission(query, selectedModel); // Use the main query state and selected model
   };
 
   const handleClear = () => {
@@ -220,6 +377,10 @@ function App() {
     setInputTokens(null);
     setOutputTokens(null);
     setEstimatedCost(null);
+    // Clear voice input states as well
+    setIsRecording(false);
+    setIsTranscribing(false);
+    setTranscriptionError(null);
   };
 
   // Determine if the clear button should be disabled
@@ -250,27 +411,89 @@ function App() {
               placeholder="Ask your Notion knowledge base..."
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              disabled={isLoading}
               className="flex-grow"
+              disabled={isLoading}
             />
-            <Button type="submit" disabled={isLoading || !query.trim()}>
-              {isLoading ? (
-                <LoaderCircle className="animate-spin h-5 w-5" /> 
-              ) : (
-                "Query"
-              )}
-            </Button>
-            <Button 
-              type="button"
-              variant="outline" 
-              size="icon" 
-              onClick={handleClear}
-              disabled={isLoading || isClearDisabled} 
-              aria-label="Clear query and results"
-            >
-              <X className="h-5 w-5" />
-            </Button>
+            {/* Voice Operation Buttons Area - Main Mic Button */}
+            {!isRecording && !isTranscribing && (
+              <Button 
+                type="button" 
+                variant="ghost" 
+                size="icon" 
+                onClick={handleToggleRecording} // Only starts recording
+                disabled={isLoading} 
+                aria-label="Start voice recording"
+                className={`p-2`}
+              >
+                {transcriptionError ? <MicOff className="h-5 w-5 text-red-500" /> : <Mic className="h-5 w-5" />}
+              </Button>
+            )}
+
+            {/* Submit and Clear buttons for text input */} 
+            {!isRecording && !isTranscribing && (
+              <>
+                <Button type="submit" disabled={isLoading || !query.trim() || isRecording || isTranscribing}>
+                  {isLoading ? (
+                    <LoaderCircle className="animate-spin h-5 w-5" /> 
+                  ) : (
+                    "Query"
+                  )}
+                </Button>
+                <Button 
+                  type="button" 
+                  onClick={handleClear} 
+                  variant="outline"
+                  disabled={isClearDisabled || isLoading}
+                >
+                  <X className="h-5 w-5" /> 
+                  <span className="ml-2 sm:inline hidden">Clear</span>
+                </Button>
+              </>
+            )}
           </div>
+
+          {/* Voice Recording Active Bar */} 
+          {isRecording && (
+            <div className="flex items-center justify-between gap-2 p-2 border rounded-md bg-muted/40">
+              <Button 
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={handleCancelRecording}
+                aria-label="Cancel voice recording"
+                className="p-2 text-red-500"
+              >
+                <X className="h-6 w-6" />
+              </Button>
+              <div className="flex flex-col items-center">
+                <span className="text-xs text-muted-foreground">Recording...</span>
+                <span className="text-lg font-semibold tabular-nums">
+                  {Math.floor(recordingTime / 60)}:{String(recordingTime % 60).padStart(2, '0')}
+                </span>
+              </div>
+              <Button 
+                type="button"
+                variant="ghost"
+                size="icon"
+                onClick={handleToggleRecording} // This will stop recording & trigger transcription
+                aria-label="Send voice recording"
+                className="p-2 text-green-500"
+              >
+                <ArrowUpCircle className="h-6 w-6" />
+              </Button>
+            </div>
+          )}
+
+          {/* Transcription Error Display */}
+          {transcriptionError && (
+            <Alert variant="destructive" className="mt-2">
+              <MicOff className="h-4 w-4" />
+              <AlertTitle>Transcription Error</AlertTitle>
+              <AlertDescription>
+                {transcriptionError}
+              </AlertDescription>
+            </Alert>
+          )}
 
           <div className="flex flex-col space-y-1.5">
             <label htmlFor="model-select" className="text-sm font-medium text-foreground">Select Model:</label>

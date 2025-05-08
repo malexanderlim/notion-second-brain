@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
 from typing import List, Dict, Any, Optional
@@ -16,7 +16,8 @@ from backend.rag_query import perform_rag_query
 from backend.rag_initializer import (
     load_rag_data, 
     initialize_openai_client, 
-    initialize_anthropic_client
+    initialize_anthropic_client,
+    get_openai_client # Assuming a getter for the client instance
 )
 
 # Setup logger for the main application
@@ -89,6 +90,10 @@ class QueryResponse(BaseModel):
 
 class LastUpdatedResponse(BaseModel):
     last_updated_timestamp: Optional[str] = None
+    error: Optional[str] = None
+
+class TranscriptionResponse(BaseModel):
+    transcription: str
     error: Optional[str] = None
 
 # --- API Endpoints ---
@@ -183,6 +188,33 @@ def get_last_updated_timestamp():
     except Exception as e:
         logger.error(f"Error reading or parsing timestamp file {timestamp_file_path}: {e}", exc_info=True)
         return LastUpdatedResponse(last_updated_timestamp=None, error=f"Error reading timestamp file: {str(e)}")
+
+@app.post("/api/transcribe", response_model=TranscriptionResponse, tags=["Transcription"])
+async def transcribe_audio(file: UploadFile = File(...)):
+    """Receives an audio file and returns its transcription using OpenAI Whisper."""
+    logger.info(f"Received audio file for transcription: {file.filename}, content type: {file.content_type}")
+
+    openai_client = get_openai_client() # Get the initialized client
+    if not openai_client:
+        logger.error("OpenAI client not initialized. Cannot transcribe audio.")
+        raise HTTPException(status_code=500, detail="OpenAI client not available. Transcription service is down.")
+
+    try:
+        # Ensure the file pointer is at the beginning of the file stream
+        await file.seek(0)
+        file_bytes = await file.read()
+
+        transcription_result = openai_client.audio.transcriptions.create(
+            model="whisper-1",
+            file=(file.filename, file_bytes)
+        )
+        
+        transcribed_text = transcription_result.text
+        logger.info(f"Successfully transcribed audio file: {file.filename}. Transcription length: {len(transcribed_text)}")
+        return TranscriptionResponse(transcription=transcribed_text)
+    except Exception as e:
+        logger.error(f"Error during audio transcription for file {file.filename}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to transcribe audio: {str(e)}")
 
 # --- Optional: Add command to run the server easily ---
 # uvicorn backend.main:app --reload --port 8000

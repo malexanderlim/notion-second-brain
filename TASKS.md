@@ -175,7 +175,41 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Display a generic error message if the API call fails.
     - [ ] **Persist Query History:** Modify state to store a list of query/response/error entries instead of just the latest one. Update rendering logic to display the history.
   - [ ] **Future UI Enhancements:**
-    - [ ] **Voice Input:** Add a microphone icon/button to allow users to ask questions via voice. Requires using browser Web Speech API (for speech recognition) or integrating a dedicated speech-to-text service.
+    - [x] **Voice Input (Planned - See `design/VOICE_INPUT_FEATURE_TDD.md`):** Add a microphone icon/button to allow users to ask questions via voice. Requires integrating a dedicated speech-to-text service (e.g., OpenAI Whisper).
+      - [x] **Phase 1: Backend Endpoint for Transcription**
+        - [x] Create new POST endpoint `/api/transcribe` in `backend/main.py`.
+        - [x] Implement logic to receive audio file upload.
+        - [x] Integrate OpenAI Whisper API client call for transcription (model: `whisper-1`).
+        - [x] Ensure `OPENAI_API_KEY` is correctly loaded and used.
+        - [x] Return transcribed text in JSON response (e.g., `{"transcription": "text"}`).
+        - [x] Implement basic error handling for API calls and file uploads.
+        - [x] Add/Verify `openai` and `python-multipart` in `backend/requirements.txt`.
+        - [x] Test endpoint with `curl` or Postman using sample audio files.
+      - [x] **Phase 2: Frontend Audio Capture & UI Integration**
+        - [x] Add microphone `IconButton` (e.g., `Mic` icon from `lucide-react`) to `frontend/src/App.tsx` next to the query input.
+        - [x] Implement state variables/refs: `isRecording`, `isTranscribing`, `transcriptionError`, `audioChunksRef`, `mediaRecorderRef`, `recordingTime`, `timerIntervalRef`, `isCancelledRef`.
+        - [x] Implement microphone permission request using `navigator.mediaDevices.getUserMedia`.
+        - [x] Implement audio recording logic using `MediaRecorder` API:
+          - [x] Start recording on icon click (if not already recording).
+          - [x] Store audio chunks in ref.
+          - [x] Stop recording on icon click (Send or Cancel).
+          - [x] Combine chunks into a `Blob` (in `onstop`).
+        - [x] Implement transcription request logic (within `onstop`):
+          - [x] Set `isTranscribing` state.
+          - [x] Create `FormData` and append `audioBlob`.
+          - [x] Make POST request to `/api/transcribe`.
+          - [x] On success: populate query input state, clear relevant states.
+          - [x] On failure: set `transcriptionError` state.
+        - [x] Implement auto-submit behavior after successful transcription.
+      - [x] **Phase 3: Refinements & Error Handling**
+        - [x] Implement visual feedback for UI states (idle, recording, transcribing, error) for the microphone button and voice action bar.
+        - [x] Display `transcriptionError` messages to the user (e.g., Alert component).
+        - [x] Handle microphone access denial gracefully.
+        - [ ] Test audio recording and transcription across different browsers (Chrome, Firefox, Safari).
+        - [x] Address open questions from TDD (max recording duration set to 30s, audio format handled).
+      - [ ] **Phase 4: Documentation & Final Testing**
+        - [ ] Update `README.md` to include information about the voice input feature.
+        - [ ] Perform thorough end-to-end testing of the entire voice input workflow.
     - [x] **Improve RAG Output Display (`frontend/src/App.tsx`):**
       - [x] **Answer Block Styling:**
         - [x] Confirm `react-markdown` (or equivalent) correctly renders LLM-provided markdown (bolding, emphasis).

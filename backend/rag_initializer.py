@@ -189,6 +189,20 @@ def initialize_anthropic_client(api_key: str | None):
         anthropic_client = None # Ensure client is None if initialization fails
         # Do not raise here, allow app to start, but Anthropic features will be disabled
 
+def get_openai_client():
+    """Returns the initialized OpenAI client instance."""
+    global openai_client
+    if not openai_client:
+        logger.warning("get_openai_client() called but client is not initialized.")
+    return openai_client
+
+def get_anthropic_client():
+    """Returns the initialized Anthropic client instance."""
+    global anthropic_client
+    if not anthropic_client:
+        logger.warning("get_anthropic_client() called but client is not initialized.")
+    return anthropic_client
+
 # Function to get the current state (optional, provides controlled access)
 def get_rag_globals() -> dict:
     """Returns a dictionary containing the current state of initialized RAG globals."""
