@@ -30,15 +30,18 @@ graph TD
     -   `index_mapping.json`: A JSON file mapping each vector index in FAISS back to its corresponding journal entry's metadata and content. Includes `page_id`, `title`, `entry_date`, full `content`, and extracted metadata like `Family`, `Friends`, `Tags`.
     -   `metadata_cache.json`: Stores unique values for filterable metadata fields (e.g., all unique names in 'Family', all unique tags in 'Tags') to aid query analysis.
     -   `schema.json`: A representation of the Notion database schema, detailing property names and types.
+    -   `last_entry_update_timestamp.txt`: A text file storing the ISO timestamp of the most recently processed entry during the last successful run of `build_index.py`. This is used by the frontend to display when the data was last synced.
 -   **Backend API (`backend/main.py`, `backend/rag_query.py`):**
     -   Built with FastAPI.
     -   Provides an endpoint (e.g., `/api/query`) to receive user queries, including an optional `model_name` for selecting the LLM.
+    -   Provides an endpoint (`/api/last-updated`) to retrieve the timestamp from `last_entry_update_timestamp.txt`.
     -   Orchestrates the RAG process using helper functions.
     -   Contains `MODEL_CONFIG` defining available models, their API IDs, providers, and pricing.
 -   **LLM Providers (OpenAI, Anthropic):** Used for generating text embeddings (e.g., OpenAI's `text-embedding-ada-002`) and for powering Large Language Model (LLM) calls (e.g., OpenAI's `gpt-4o`, `gpt-4o-mini`, Anthropic's `claude-3-5-haiku-20241022`) for query analysis and final answer generation.
 -   **Frontend UI (`frontend/src/App.tsx`):**
     -   React/Vite/TypeScript application.
     -   Provides an interface for users to select a model, input queries, and view answers with sources, model details, and estimated costs.
+    -   Displays the "Last Synced Entry" date by fetching it from the `/api/last-updated` backend endpoint.
 
 ## 2. Indexing Process (`build_index.py`)
 
@@ -58,7 +61,11 @@ graph TD
     -   Extracts unique string values for key filterable list/multi-select fields (e.g., `Family`, `Friends`, `Tags`).
     -   Stores these efficiently (e.g., dictionary of sets, then saved as lists in JSON) in `metadata_cache.json`. This helps the query analysis LLM map query terms to known metadata values.
 7.  **Schema (`schema.json`):** While not directly created by `build_index.py`, this file (expected to be present) defines the structure of the Notion DB properties and is used by the query analysis step. It should be generated or maintained based on the actual Notion DB schema.
-8.  **Incremental Updates:** The script supports loading an existing index and mapping to add new entries, allowing for checkpointing and incremental builds.
+8.  **Last Processed Entry Timestamp (`last_entry_update_timestamp.txt`):**
+    -   During the processing of entries (both initial and incremental), `build_index.py` tracks the `last_edited_time` of each entry.
+    -   After successfully processing all input files and saving the index and mapping, it writes the most recent `last_edited_time` encountered to `last_entry_update_timestamp.txt` as an ISO format string.
+    -   If an existing timestamp file is present and not a forced rebuild, the script ensures this file always reflects the latest entry processed across all runs.
+9.  **Incremental Updates:** The script supports loading an existing index and mapping to add new entries, allowing for checkpointing and incremental builds.
 
 ## 3. Backend API Query Flow
 
@@ -68,6 +75,7 @@ The primary logic resides in `backend/rag_query.py` (`perform_rag_query` functio
 
 -   The FastAPI app in `main.py` receives a POST request to `/api/query` with a JSON body like `{"query": "user's question", "model_name": "optional_model_key"}`.
 -   On startup, `main.py` calls `load_rag_data()` (from `rag_query.py`) to load `index.faiss`, `index_mapping.json`, `metadata_cache.json`, and `schema.json` into global variables. It also initializes the OpenAI and Anthropic clients based on available API keys. The `MODEL_CONFIG` (defining model properties, API IDs, providers, and costs) is also available in `rag_query.py`.
+-   The backend also provides a GET endpoint `/api/last-updated` which reads the `last_entry_update_timestamp.txt` file (located in the project root) and returns its content.
 
 ### 3.2. Query Analysis (`analyze_query_for_filters` in `rag_query.py`)
 
@@ -179,5 +187,6 @@ The primary logic resides in `backend/rag_query.py` (`perform_rag_query` functio
             -   The formatted `source.date` in parentheses, e.g., `(November 11, 2024)`.
 -   **Loading/Error States:** The UI handles loading spinners and displays error messages from the API.
 -   **Query Suggestion:** Basic logic to suggest adding a timeframe for queries using "recent" keywords without a year.
+-   **Last Synced Display:** On component mount, an `axios` GET request is made to `/api/last-updated`. The retrieved timestamp (or an error message) is displayed, formatted for readability.
 
 This overview should provide a solid understanding of the system's mechanics. 

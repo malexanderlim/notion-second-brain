@@ -26,6 +26,8 @@ DEFAULT_INPUT_GLOB = "output/*.json" # Default to process all JSONs in output
 DEFAULT_INDEX_FILE = "index.faiss"
 DEFAULT_MAPPING_FILE = "index_mapping.json"
 EMBEDDING_MODEL = "text-embedding-ada-002"
+DEFAULT_LAST_ENTRY_TIMESTAMP_FILE = "last_entry_update_timestamp.txt" # New constant
+
 # Simple retry logic for embedding API calls
 MAX_EMBEDDING_RETRIES = 3
 EMBEDDING_RETRY_DELAY = 5 # seconds
@@ -167,6 +169,11 @@ def main():
         help=f"Path to load/save the index-to-entry mapping JSON file (default: {DEFAULT_MAPPING_FILE})"
     )
     parser.add_argument(
+        "--last-entry-timestamp-file",
+        default=DEFAULT_LAST_ENTRY_TIMESTAMP_FILE,
+        help=f"Path to load/save the last processed entry timestamp file (default: {DEFAULT_LAST_ENTRY_TIMESTAMP_FILE})"
+    )
+    parser.add_argument(
         "--force-rebuild",
         action="store_true",
         help="Ignore existing index and mapping files and build from scratch."
@@ -187,6 +194,7 @@ def main():
     logger.info(f"Input pattern(s): {args.input}")
     logger.info(f"Index file: {args.index_file}")
     logger.info(f"Mapping file: {args.mapping_file}")
+    logger.info(f"Last entry timestamp file: {args.last_entry_timestamp_file}") # Log new file
     logger.info(f"Force rebuild: {args.force_rebuild}")
     logger.info(f"Batch size: {BATCH_SIZE}")
 
@@ -211,6 +219,20 @@ def main():
     mapping_data = []
     processed_page_ids = set()
     dimension = None # Will be determined later
+    current_max_last_edited_time = None
+
+    # --- Load existing last_entry_update_timestamp if not forcing rebuild ---
+    if not args.force_rebuild and os.path.exists(args.last_entry_timestamp_file):
+        try:
+            with open(args.last_entry_timestamp_file, 'r', encoding='utf-8') as f_ts:
+                timestamp_str = f_ts.read().strip()
+                if timestamp_str:
+                    current_max_last_edited_time = datetime.fromisoformat(timestamp_str)
+                    logger.info(f"Loaded existing last entry update timestamp: {current_max_last_edited_time.isoformat()}")
+        except Exception as e:
+            logger.warning(f"Could not read or parse existing last entry timestamp file at {args.last_entry_timestamp_file}: {e}. Will determine from scratch.")
+            current_max_last_edited_time = None # Reset if error
+
 
     if not args.force_rebuild and os.path.exists(args.index_file) and os.path.exists(args.mapping_file):
         logger.info(f"Attempting to load existing index from {args.index_file} and mapping from {args.mapping_file}...")
@@ -280,6 +302,9 @@ def main():
     total_embeddings_added_this_run = 0
     files_processed_count = 0
     logged_one_example = False # Flag to log only once
+
+    # Initialize overall_max_last_edited_time with the loaded value or None
+    overall_max_last_edited_time = current_max_last_edited_time
 
     for file_path in input_files:
         files_processed_count += 1
@@ -412,6 +437,7 @@ def main():
             total_entries_processed_this_run += 1
             page_id = entry.get('page_id')
             entry_title = entry.get('title', '[No Title]') # Get title early for logging
+            entry_last_edited_time_str = entry.get("last_edited_time") # Get last_edited_time
 
             # --- Skip checks (ID, duplicate, content) ---
             if not page_id:
@@ -430,6 +456,19 @@ def main():
                 logger.warning(f"Entry {i+1}/{entries_in_file} (ID: {page_id}, Title: '{entry_title}') has empty/blank block content. Skipping embedding.")
                 skipped_in_file += 1
                 continue
+            
+            # --- Track overall_max_last_edited_time ---
+            if entry_last_edited_time_str:
+                try:
+                    # Notion's last_edited_time is usually like "2024-04-29T22:06:00.000Z"
+                    # Convert 'Z' to '+00:00' for fromisoformat if necessary
+                    entry_dt = datetime.fromisoformat(entry_last_edited_time_str.replace('Z', '+00:00'))
+                    if overall_max_last_edited_time is None or entry_dt > overall_max_last_edited_time:
+                        overall_max_last_edited_time = entry_dt
+                        logger.debug(f"New overall_max_last_edited_time: {overall_max_last_edited_time.isoformat()} from page {page_id}")
+                except ValueError as ve:
+                    logger.warning(f"Could not parse last_edited_time '{entry_last_edited_time_str}' for page {page_id} (Title: '{entry_title}'). Error: {ve}. Skipping for timestamp tracking.")
+            # --- End Track overall_max_last_edited_time ---
             
             # --- Construct enriched text for embedding --- 
             metadata_parts = []
@@ -547,6 +586,42 @@ def main():
     logger.info(f"Total new embeddings added to index: {total_embeddings_added_this_run}")
     logger.info(f"Final index size: {index.ntotal if index else 0} vectors")
     logger.info(f"Final mapping size: {len(mapping_data)} entries")
+
+    if index is None or index.ntotal == 0:
+        logger.warning("No vectors were added to the index. Index file and mapping will not be saved.")
+        # Also don't save metadata cache or last entry timestamp if nothing was indexed
+    else:
+        # Save FAISS index
+        try:
+            faiss.write_index(index, args.index_file)
+            logger.info(f"FAISS index saved to {args.index_file} with {index.ntotal} vectors.")
+        except Exception as e:
+            logger.error(f"Error saving FAISS index: {e}", exc_info=True)
+
+        # Save mapping data
+        try:
+            with open(args.mapping_file, 'w', encoding='utf-8') as f:
+                json.dump(mapping_data, f, indent=2)
+            logger.info(f"Index-to-entry mapping saved to {args.mapping_file} with {len(mapping_data)} entries.")
+        except Exception as e:
+            logger.error(f"Error saving mapping data: {e}", exc_info=True)
+            
+        # Save metadata cache
+        extract_and_save_metadata_cache(mapping_data, "metadata_cache.json") # Assuming fixed name for now
+
+        # Save the overall maximum last_edited_time
+        if overall_max_last_edited_time:
+            try:
+                with open(args.last_entry_timestamp_file, 'w', encoding='utf-8') as f_ts:
+                    f_ts.write(overall_max_last_edited_time.isoformat())
+                logger.info(f"Last processed entry timestamp saved to {args.last_entry_timestamp_file}: {overall_max_last_edited_time.isoformat()}")
+            except Exception as e:
+                logger.error(f"Error saving last processed entry timestamp: {e}", exc_info=True)
+        else:
+            logger.info("No last_edited_time was found in processed entries. Timestamp file not updated/created.")
+
+
+    logger.info("Index build/update process finished.")
 
 if __name__ == "__main__":
     # Check for OPENAI_API_KEY early
