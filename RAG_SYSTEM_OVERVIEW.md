@@ -24,7 +24,7 @@ graph TD
 
 **Components:**
 -   **Notion Database:** The source of journal entries.
--   **`cli.py`:** Command-line interface for various operations, including exporting data from Notion into JSON files (typically one per month of entries).
+-   **`cli.py`:** Command-line interface for setup operations (exporting data, testing connection, retrieving schema) and for initiating queries. Query execution now delegates to the core RAG logic within the `backend` module.
 -   **`build_index.py`:** Script responsible for processing the exported JSON files, generating embeddings for entry content, creating a FAISS vector index, an index-to-entry mapping file, and a cache of distinct metadata values.
     -   `index.faiss`: The FAISS vector store containing embeddings of journal entry content.
     -   `index_mapping.json`: A JSON file mapping each vector index in FAISS back to its corresponding journal entry's metadata and content. Includes `page_id`, `title`, `entry_date`, full `content`, and extracted metadata like `Family`, `Friends`, `Tags`.
@@ -35,7 +35,8 @@ graph TD
     -   Built with FastAPI.
     -   Provides an endpoint (e.g., `/api/query`) to receive user queries, including an optional `model_name` for selecting the LLM.
     -   Provides an endpoint (`/api/last-updated`) to retrieve the timestamp from `last_entry_update_timestamp.txt`.
-    -   Orchestrates the RAG process using helper functions.
+    -   Contains the core RAG processing logic (`perform_rag_query` in `rag_query.py`) and orchestrates the process.
+    -   Includes a synchronous wrapper (`execute_rag_query_sync` in `rag_query.py`) used by `cli.py` for querying.
     -   Contains `MODEL_CONFIG` defining available models, their API IDs, providers, and pricing.
 -   **LLM Providers (OpenAI, Anthropic):** Used for generating text embeddings (e.g., OpenAI's `text-embedding-ada-002`) and for powering Large Language Model (LLM) calls (e.g., OpenAI's `gpt-4o`, `gpt-4o-mini`, Anthropic's `claude-3-5-haiku-20241022`) for query analysis and final answer generation.
 -   **Frontend UI (`frontend/src/App.tsx`):**
@@ -70,6 +71,8 @@ graph TD
 ## 3. Backend API Query Flow
 
 The primary logic resides in `backend/rag_query.py` (`perform_rag_query` function), orchestrated by `backend/main.py` which handles the API request/response cycle.
+
+**Note:** The `cli.py --query` command now utilizes this same core RAG logic by calling a synchronous wrapper function (`execute_rag_query_sync`) within `backend/rag_query.py`.
 
 ### 3.1. Request Reception & Initialization
 

@@ -141,11 +141,16 @@ These steps assume you have Python 3, Node.js (with npm or yarn), and `git` inst
 ### CLI Querying (Legacy/Alternative)
 
 Basic querying via `cli.py` is still available if the index is built:
-```bash
-python cli.py --query "What did I do last weekend?"
-```
-
-## Example Implementation Plan for Cursor
++The CLI query function now uses the same advanced RAG engine as the web UI (`backend/rag_query.py`). You can also specify a model using the `--model` flag.
++
+ ```bash
+ python cli.py --query "What did I do last weekend?"
++
++# Example using a specific model:
++python cli.py --query "Tell me about my umeshu project" --model claude-3-5-haiku-20241022
+ ```
+ 
+ ## Example Implementation Plan for Cursor
 
 (This section can be updated for future feature development.)
 
