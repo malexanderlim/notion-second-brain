@@ -273,6 +273,66 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
   - [ ] **Documentation & Design:**
     - [x] Create `design/MODEL_SELECTION_COST_TDD.md` outlining the design for this feature.
 
+- [x] **Refactor `backend/rag_query.py` for Improved Modularity and Readability**
+  - [x] **Objective:** Break down the monolithic `rag_query.py` into smaller, more focused modules to enhance maintainability, readability, testability, and reduce cognitive load, addressing issues like context limits during development.
+  - [x] **Phase 1: Analysis and Planning (Largely completed)**
+    - [x] Identify logical components within `rag_query.py` (e.g., config, data loading, query analysis, retrieval, prompt construction, LLM interaction, cost calculation).
+    - [x] Define a proposed modular structure (as detailed in subsequent phases).
+  - [x] **Phase 2: Core Logic Extraction (Completed in this session)**
+    - [x] **Task 2.1: Create `backend/rag_config.py`**
+      - [x] Move the `MODEL_CONFIG` dictionary into this new file.
+      - [x] Relocate other shared constants currently in `rag_query.py` to this configuration module.
+      - [x] Update `rag_query.py` (conceptually) to import configurations from this new central location.
+    - [x] **Task 2.2: Create `backend/query_analyzer.py`**
+      - [x] Extract the `analyze_query_for_filters()` function.
+      - [x] Define a clear interface.
+      - [x] Modify the main RAG orchestration logic (conceptually) to call this new module.
+    - [x] **Task 2.3: Create `backend/retrieval_logic.py`**
+      - [x] **Sub-task 2.3.1: Metadata Filtering Logic Extraction:**
+        - [x] Isolate the complex metadata-based candidate filtering process, including fallbacks.
+        - [x] Define inputs and outputs.
+      - [x] **Sub-task 2.3.2: Semantic Search and Embedding Logic Extraction:**
+        - [x] Move the `get_embedding()` function.
+        - [x] Isolate the FAISS search logic (`perform_faiss_search`).
+        - [x] Define inputs and outputs.
+      - [x] Update the main RAG orchestration logic (conceptually) to utilize these new functions.
+    - [x] **Task 2.4: Create `backend/prompt_constructor.py`**
+      - [x] Consolidate all prompt templates.
+      - [x] Develop `construct_final_prompts` function.
+      - [x] Define inputs and outputs.
+      - [x] Modify the main RAG orchestration logic (conceptually) to use this module.
+    - [x] **Task 2.5: Create `backend/llm_interface.py`**
+      - [x] Extract the logic for making the final answer generation call (`generate_final_answer`).
+      - [x] Define inputs and outputs.
+      - [x] Update the main RAG orchestration logic (conceptually) to delegate the final LLM call.
+  - [x] **Phase 3: Orchestrator Refinement and Utilities (Partially Completed)**
+    - [x] **Task 3.1: Refactor `perform_rag_query()` in `backend/rag_query.py` (or rename to `backend/rag_orchestrator.py`)**
+      - [x] Transform `perform_rag_query()` into a lean orchestrator. (Largely done conceptually by removing extracted logic).
+      - [x] Assemble the final response dictionary using outputs from the specialized modules. (Mostly done).
+      - [x] Ensure `execute_rag_query_sync()` wrapper uses the refactored orchestrator correctly. (Needs verification after applying changes).
+    - [x] **Task 3.2: Centralize Cost Calculation**
+      - [x] Create `backend/cost_utils.py` with `calculate_estimated_cost` function.
+      - [x] Define inputs and output.
+      - [x] Update main RAG orchestration logic (conceptually) to use this utility.
+    - [x] **Task 3.3: Centralize Data Loading and Client Initialization**
+      - [x] Create `backend/rag_initializer.py`.
+      - [x] Move `load_rag_data()`, `initialize_openai_client()`, `initialize_anthropic_client()` functions.
+      - [x] Manage global state (clients, index, data) within the initializer.
+      - [x] Update main RAG orchestration logic (conceptually) to rely on imported state from the initializer (removing internal definitions and load calls).
+  - [x] **Phase 4: Testing and Cleanup (Next Steps)**
+    - [x] **Task 4.1: Apply Conceptual Changes and Verify**
+       - [x] Apply the final refactoring steps to `backend/rag_query.py` (removing globals, initializers, load calls, ensuring imports from `rag_initializer` work).
+       - [x] Ensure the application entry points (e.g., `main.py`, `cli.py`) correctly call the functions in `backend/rag_initializer` *before* attempting to use `perform_rag_query`.
+    - [x] **Task 4.2: Comprehensive End-to-End Testing**
+      - [x] Rigorously test the entire refactored RAG pipeline after applying all changes.
+      - [x] Verify various query types, model selections, and edge cases.
+      - [x] Verify token counting and cost estimation.
+    - [x] **Task 4.3: Code Cleanup and Documentation**
+      - [x] Add/update docstrings for all new/modified modules and functions.
+      - [x] Ensure consistent coding style.
+      - [x] Remove any remaining commented-out code blocks from the refactoring process.
+      - [x] Update external documentation if needed.
+
 - [ ] **Testing & Reliability:**
   - [ ] Implement comprehensive unit tests for core modules (API client, extractors, transformers, storage, RAG components).
   - [ ] Implement integration tests for `cli.py` export and query workflows.

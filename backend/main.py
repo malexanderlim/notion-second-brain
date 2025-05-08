@@ -11,7 +11,13 @@ load_dotenv()
 
 # --- Import RAG logic AFTER loading .env ---
 # Ensure functions needed for initialization are imported
-from backend.rag_query import perform_rag_query, load_rag_data, initialize_openai_client, initialize_anthropic_client
+from backend.rag_query import perform_rag_query
+# Import initialization functions directly from rag_initializer
+from backend.rag_initializer import (
+    load_rag_data, 
+    initialize_openai_client, 
+    initialize_anthropic_client
+)
 
 # Setup logger for the main application
 logger = logging.getLogger(__name__)
