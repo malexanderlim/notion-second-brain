@@ -8,4 +8,4 @@ source ./venv/bin/activate
 
 # Start FastAPI server from project root, pointing to the app object
 # Add --host 0.0.0.0 if you need to access it from other devices on your network
-uvicorn backend.main:app --reload --app-dir . 
+uvicorn backend.main:app --reload --app-dir . --host 0.0.0.0 

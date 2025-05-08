@@ -54,6 +54,7 @@ app = FastAPI(
 origins = [
     "http://localhost:5173",  # Default Vite dev server port
     "http://localhost:3000",  # Common alternative dev port
+    "http://192.168.1.41:5173", # Added for local network access
     # Add your frontend production URL here later, e.g.:
     # "https://your-frontend-app.vercel.app", 
 ]
