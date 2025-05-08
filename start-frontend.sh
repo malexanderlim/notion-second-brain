@@ -3,4 +3,4 @@
 
 echo "Starting Frontend Development Server..."
 cd frontend
-npm run dev 
+npm run dev -- --host 
