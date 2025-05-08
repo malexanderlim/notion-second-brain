@@ -327,3 +327,42 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 - `docs/` - Directory for documentation
 - `backend/` - Directory for backend API server code ✅
   - `backend/main.py`
+
+## Refactor cli.py for Enhanced Modularity and Maintainability
+
+The `cli.py` script has grown significantly and handles multiple distinct responsibilities. This refactoring effort aims to improve its structure, making it more modular, readable, and easier to maintain by separating concerns into dedicated modules.
+
+- [x] **1. Create `notion_second_brain/data_exporter.py` module:**
+  - [x] Move the data export logic from `cli.py` into this new module.
+  - [x] This includes the `handle_export()` function.
+  - [x] Also move the helper function `build_notion_filter_from_args()` as it's tightly coupled with export argument processing.
+  - [x] The module defines `handle_export(args, notion_client_instance, db_id)`.
+  - [x] Ensured all necessary imports (`NotionClient`, `json_storage`, `datetime`, `config`, etc.) are correctly handled within this module.
+
+- [x] **2. Consolidate RAG Logic into `backend/rag_query.py`:**
+  - [-] ~~Move the RAG pipeline logic from `cli.py` into `notion_second_brain/rag_pipeline.py`.~~ (Superseded)
+  - [x] Instead, RAG logic was consolidated into the more advanced `backend/rag_query.py` module already used by the UI.
+  - [x] `notion_second_brain/rag_pipeline.py` was deleted.
+  - [x] Added a synchronous wrapper `execute_rag_query_sync` to `backend/rag_query.py` for CLI use.
+
+- [x] **3. Refactor `cli.py` (Main Entry Point):**
+  - [x] Remove the code that was moved to `data_exporter.py`.
+  - [x] Remove the outdated RAG code previously extracted from `cli.py`.
+  - [x] Update the `main()` function in `cli.py` to:
+    - [x] Import `handle_export` from `notion_second_brain.data_exporter`.
+    - [x] Import `execute_rag_query_sync`, initializers (`load_rag_data`, `initialize_openai_client`, `initialize_anthropic_client`) from `backend/rag_query.py`.
+    - [x] Call RAG/LLM initializers early.
+    - [x] Call imported functions (`handle_export`, `execute_rag_query_sync`) based on arguments.
+  - [x] Added `--model` argument for query action.
+  - [x] The `parse_arguments()` function remains in `cli.py`.
+  - [x] Logic for simpler actions like `--test-connection` and `--schema` remains in `cli.py`.
+  - [x] Ensured `sys.path` manipulations are still correct.
+
+- [x] **4. Review and Test:**
+  - [x] Thoroughly tested all CLI functionalities after refactoring:
+    - [x] `python cli.py --export ...` (with various filter options)
+    - [x] `python cli.py --query "..."` (using consolidated logic)
+    - [x] `python cli.py --schema`
+    - [x] `python cli.py --test-connection`
+  - [x] Ensured logging works as expected across the refactored modules.
+  - [x] Verified that all dependencies are correctly managed and imported (fixed import errors).

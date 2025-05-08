@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 import time
 import asyncio
 import numpy as np
+import sys
 
 from openai import OpenAI, RateLimitError, APIError
 try:
@@ -995,3 +996,65 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
     
     response_data["sources"] = exemplar_sources_for_response
     return response_data
+
+# --- Synchronous Wrapper for CLI --- 
+def execute_rag_query_sync(args):
+    """Synchronous wrapper to execute the RAG query process for the CLI."""
+    logger.info("Executing RAG query via synchronous wrapper for CLI...")
+    
+    user_query = args.query
+    # Extract model name from args if provided, otherwise None (perform_rag_query handles default)
+    model_name = getattr(args, 'model', None) 
+    
+    # Ensure data is loaded (should be called by cli.py main, but safe to call again)
+    try:
+        load_rag_data()
+    except Exception as e:
+        logger.error(f"Failed to load RAG data in sync wrapper: {e}", exc_info=True)
+        print(f"Error: Failed to load necessary RAG data files. {e}")
+        sys.exit(1)
+
+    # Ensure clients are initialized (should be called by cli.py main)
+    # This check is just a safeguard; initialization responsibility is in the caller.
+    if not openai_client:
+        logger.warning("OpenAI client not initialized before calling execute_rag_query_sync.")
+        # Attempt to initialize here? Or rely on the check within perform_rag_query?
+        # Let's rely on the check within perform_rag_query for now, but log the warning.
+        # print("Error: OpenAI client not initialized. Please check API key setup.")
+        # sys.exit(1)
+
+    try:
+        logger.info(f"Running perform_rag_query for query: \"{user_query}\" with model: {model_name if model_name else 'Default'}")
+        # Use asyncio.run to execute the async function
+        response_data = asyncio.run(perform_rag_query(user_query, model_name))
+        
+        # Print results to console (similar to old CLI behavior)
+        print("\nAnswer:")
+        print(response_data.get("answer", "No answer returned."))
+        
+        # Optionally print sources and cost for CLI users as well
+        sources = response_data.get("sources", [])
+        if sources:
+            print("\nSources Used:")
+            for source in sources:
+                # Format similar to backend, maybe simpler for CLI
+                title = source.get('title', 'Unknown Title')
+                date_str = source.get('date', 'Unknown Date')
+                url = source.get('url', '')
+                print(f"- {title} ({date_str}) {f'[Link: {url}]' if url else ''}")
+
+        cost = response_data.get("estimated_cost_usd", 0.0)
+        tokens_in = response_data.get("input_tokens", 0)
+        tokens_out = response_data.get("output_tokens", 0)
+        model_actually_used = response_data.get("model_used", "Unknown")
+        provider = response_data.get("model_provider_used", "Unknown")
+        
+        print("\n--- Query Stats ---")
+        print(f"Model Used: {model_actually_used} ({provider})" ) 
+        print(f"Tokens: {tokens_in} (prompt) / {tokens_out} (completion)")
+        print(f"Estimated Cost: ${cost:.6f} USD")
+
+    except Exception as e:
+        logger.error(f"Error running asyncio RAG query: {e}", exc_info=True)
+        print(f"\nError occurred during query processing: {e}")
+        # Don't sys.exit here, let the main cli loop handle exit codes if necessary
