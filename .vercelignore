@@ -7,7 +7,7 @@
 venv/**
 
 # Frontend source (assuming built separately)
-frontend/**
+# frontend/**
 
 # Local data/utility directories (if not needed by live API)
 notion_second_brain/**
