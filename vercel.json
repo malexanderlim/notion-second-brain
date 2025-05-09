@@ -15,7 +15,7 @@
   ],
   "functions": {
     "api/main.py": {
-      "excludeFiles": "**/__pycache__/**,**/*.pyc,.git/**,frontend/**,tests/**,venv/**,notion_second_brain/**,scripts/**,output/**,docs/**,.cursor/**,tasks/**,design/**,*.md,*.sh,*.py,*.log,*.m4a"
+      "excludeFiles": "**/__pycache__/**,**/*.pyc,.git/**,frontend/**,tests/**,venv/**,notion_second_brain/**,scripts/**,output/**,docs/**,.cursor/**,tasks/**,design/**,*.md,*.sh,*.py,*.log"
     }
   },
   "routes": [
