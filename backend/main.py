@@ -30,6 +30,12 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
+# CORRECTED LOGGING:
+openai_key_snippet = f"'{OPENAI_API_KEY[:5]}...'" if OPENAI_API_KEY else "None"
+anthropic_key_snippet = f"'{ANTHROPIC_API_KEY[:5]}...'" if ANTHROPIC_API_KEY else "None"
+logger.info(f"Attempting to initialize with OPENAI_API_KEY: {openai_key_snippet}")
+logger.info(f"Attempting to initialize with ANTHROPIC_API_KEY: {anthropic_key_snippet}")
+
 try:
     logger.info("Loading RAG data...")
     load_rag_data()
