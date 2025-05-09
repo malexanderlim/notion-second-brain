@@ -9,14 +9,14 @@
       }
     },
     {
-      "src": "backend/**/*.py",
+      "src": "api/main.py",
       "use": "@vercel/python"
     }
   ],
   "routes": [
     {
       "src": "/api/(.*)",
-      "dest": "backend/main.py"
+      "dest": "api/main.py"
     },
     {
       "handle": "filesystem"

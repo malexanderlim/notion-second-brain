@@ -3,31 +3,34 @@ import faiss
 import json
 import os
 import logging
-from datetime import date
-from pathlib import Path # Added for path manipulation
+from datetime import date, datetime, timezone
+from pathlib import Path
 
 # Added for Vercel Blob integration
 try:
-    from vercel_blob import download as vercel_download, VercelBlobException
+    from vercel_blob import download as vercel_download, put as vercel_put, list as vercel_list, VercelBlobException
 except ImportError:
     vercel_download = None
+    vercel_put = None
+    vercel_list = None
     VercelBlobException = None
 
 from openai import OpenAI
-try:
-    from anthropic import Anthropic
-except ImportError:
-    Anthropic = None
+from anthropic import Anthropic
+from langchain_community.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_community.document_loaders import JSONLoader
 
 # Import configuration constants
-from backend.rag_config import (
-    INDEX_PATH as DEFAULT_INDEX_FILENAME, # Renamed for clarity
-    MAPPING_PATH as DEFAULT_MAPPING_FILENAME, # Renamed for clarity
-    METADATA_CACHE_PATH as DEFAULT_METADATA_FILENAME, # Renamed for clarity
-    DATABASE_SCHEMA_PATH as DEFAULT_SCHEMA_FILENAME, # Renamed for clarity
+from .rag_config import (
+    INDEX_PATH_LOCAL, 
+    DOCSTORE_PATH_LOCAL,
+    TIMESTAMP_FILE_LOCAL,
+    RAG_CONFIG
 )
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("api.rag_initializer")
 
 # --- Constants for file names (used for both local and remote) ---
 # These were previously directly used from rag_config, now centralized for easier reference
@@ -39,8 +42,8 @@ SCHEMA_FILENAME = "schema.json"
 
 # --- Globals managed by this initializer module ---
 # These will be imported and used by the main RAG logic (rag_query.py)
-openai_client = None
-anthropic_client = None
+openai_client: Optional[OpenAI] = None
+anthropic_client: Optional[Anthropic] = None
 index = None
 mapping_data_list: list[dict] | None = None
 index_to_entry: dict[int, dict] | None = None
@@ -49,6 +52,19 @@ schema_properties: dict | None = None
 
 # Flag to prevent redundant loading
 _rag_data_loaded = False
+
+# --- Environment Variable Dependent Names for Vercel Blob ---
+# Construct blob names using today's date from RAG_CONFIG
+# Ensure RAG_CONFIG["today_date"] is set before this module is fully imported if used at module level
+# Or, move these inside functions if RAG_CONFIG["today_date"] is determined dynamically elsewhere
+
+INDEX_BLOB_NAME = RAG_CONFIG["FAISS_INDEX_FILENAME"]
+DOCSTORE_BLOB_NAME = RAG_CONFIG["DOCSTORE_FILENAME"]
+TIMESTAMP_BLOB_NAME = RAG_CONFIG["LAST_ENTRY_UPDATE_TIMESTAMP_FILENAME"]
+
+# --- Custom Exceptions ---
+class RAGSystemNotInitializedError(Exception):
+    pass
 
 def load_rag_data():
     """Loads necessary data for RAG: index, mapping (list), metadata cache, schema.
@@ -264,25 +280,31 @@ def initialize_openai_client(api_key: str | None):
     """Initializes the OpenAI client using the provided API key."""
     global openai_client
     if openai_client:
-        logger.info("OpenAI client already initialized.")
+        logger.info("OpenAI client already initialized. Skipping.") # Added skipping
         return
 
     # Enhanced logging for the API key
     if not api_key:
-        logger.error("Fatal: OpenAI API key was NOT provided (None or empty string) during initialization.")
-        # We will still raise ValueError, but the log is more specific.
-        raise ValueError("OpenAI API key not provided.")
-    else:
-        # Log type and a portion of the key for debugging, being careful not to log the whole key.
-        key_snippet = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "key_too_short_to_snippet"
-        logger.info(f"Attempting to initialize OpenAI client with API key of type {type(api_key)}, snippet: {key_snippet}")
+        logger.error("FATAL IN INITIALIZER: OpenAI API key was NOT provided (None or empty string). Cannot initialize.")
+        # We won't raise here to see if other logs appear, but this is a critical failure point.
+        return # Explicitly return if no key
+    
+    key_snippet = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "key_too_short_to_snippet"
+    logger.info(f"RAG_INITIALIZER: Attempting to initialize OpenAI client with API key snippet: {key_snippet}, type: {type(api_key)}")
 
     try:
-        openai_client = OpenAI(api_key=api_key)
-        logger.info("OpenAI client initialized successfully.") # Changed log message for clarity
+        logger.info("RAG_INITIALIZER: BEFORE OpenAI(api_key=...) call") # LOG BEFORE
+        temp_client = OpenAI(api_key=api_key) # Assign to temp var first
+        logger.info(f"RAG_INITIALIZER: AFTER OpenAI(api_key=...) call. temp_client is: {'SET' if temp_client else 'NOT SET'}") # LOG AFTER
+        
+        openai_client = temp_client # Assign to global
+        logger.info(f"RAG_INITIALIZER: OpenAI client assigned to global. openai_client is: {'SET' if openai_client else 'NOT SET'}")
+
     except Exception as e:
-        logger.error(f"Failed to initialize OpenAI client: {e}", exc_info=True)
-        raise
+        logger.error(f"RAG_INITIALIZER: FAILED to initialize OpenAI client during OpenAI(api_key=...) call: {e}", exc_info=True)
+        openai_client = None # Ensure it's None if init fails
+        # We are not re-raising here to allow the app to potentially start and log more, 
+        # but this is a critical failure for OpenAI functionality.
 
 def initialize_anthropic_client(api_key: str | None):
     """Initializes the Anthropic client using the provided API key."""

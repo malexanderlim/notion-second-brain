@@ -1,27 +1,34 @@
 from fastapi import FastAPI, HTTPException, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, HttpUrl
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union
 import os
 import logging # Import logging
 from dotenv import load_dotenv
+from datetime import datetime, timezone # Added timezone
 
 # --- Load Environment Variables First ---
 load_dotenv() 
 
 # --- Import RAG logic AFTER loading .env ---
 # Ensure functions needed for initialization are imported
-from backend.rag_query import perform_rag_query
+from .rag_query import perform_rag_query
 # Import initialization functions directly from rag_initializer
-from backend.rag_initializer import (
+from .rag_initializer import (
     load_rag_data, 
     initialize_openai_client, 
     initialize_anthropic_client,
-    get_openai_client # Assuming a getter for the client instance
+    get_openai_client,
+    get_anthropic_client,
+    get_retriever,
+    get_last_entry_update_timestamp,
+    RAGSystemNotInitializedError,
+    LLMClientNotInitializedError
 )
+from .rag_config import RAG_CONFIG # Relative import
 
 # Setup logger for the main application
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("api.main")
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
