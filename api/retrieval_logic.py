@@ -157,47 +157,6 @@ async def perform_pinecone_search(query_embedding: list[float],
         logger.error(f"Pinecone search failed: {e}", exc_info=True)
         return [], {}
 
-# FAISS search logic will be added here later
-async def perform_faiss_search(query_embedding_np: np.ndarray,
-                               effective_k: int,
-                               faiss_index: faiss.Index,
-                               selector: faiss.IDSelector | None = None
-                               ) -> tuple[np.ndarray, np.ndarray]:
-    """Performs a FAISS search with an optional selector.
-
-    Args:
-        query_embedding_np: The query embedding as a NumPy array.
-        effective_k: The number of neighbors to search for.
-        faiss_index: The loaded FAISS index object.
-        selector: An optional FAISS IDSelector to restrict the search.
-
-    Returns:
-        A tuple containing distances and retrieved indices (both NumPy arrays).
-        Returns empty arrays if effective_k is 0 or search fails.
-    """
-    if effective_k == 0:
-        logger.info("Effective K for FAISS search is 0, returning empty results.")
-        return np.array([]), np.array([[]])
-
-    logger.info(f"Performing FAISS search for {effective_k} exemplars...")
-    try:
-        search_params = None
-        if selector:
-            search_params = faiss.SearchParameters(); 
-            search_params.sel = selector
-            logger.debug(f"FAISS search will use IDSelectorBatch with {selector.nbits if hasattr(selector, 'nbits') else 'N/A'} bits / {selector.nt if hasattr(selector, 'nt') else 'N/A'} IDs.")
-        
-        # FAISS search is CPU-bound, can be run in a thread for async compatibility if needed,
-        # but usually fast enough not to block significantly for typical k.
-        # For now, direct call assuming it's acceptable.
-        distances, retrieved_indices = faiss_index.search(query_embedding_np, k=effective_k, params=search_params)
-        logger.info(f"FAISS search completed. Retrieved {retrieved_indices.shape[1] if retrieved_indices.size > 0 else 0} indices.")
-        return distances, retrieved_indices
-    except Exception as e:
-        logger.error(f"FAISS search failed: {e}", exc_info=True)
-        # Return empty arrays consistent with no results, error logged.
-        return np.array([]), np.array([[]]) 
-
 def apply_metadata_filters(mapping_data_list: list[dict],
                              filter_analysis: dict,
                              distinct_metadata_values: dict | None,

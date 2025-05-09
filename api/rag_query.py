@@ -25,7 +25,6 @@ except ImportError:
     APIConnectionError = None
 
 from .rag_config import (
-    INDEX_PATH,
     MAPPING_PATH,
     METADATA_CACHE_PATH,
     DATABASE_SCHEMA_PATH,

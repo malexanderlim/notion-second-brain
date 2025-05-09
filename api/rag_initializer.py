@@ -28,7 +28,7 @@ logger = logging.getLogger("api.rag_initializer")
 
 # --- Constants for file names (used for both local and remote) ---
 # These were previously directly used from rag_config, now centralized for easier reference
-INDEX_FILENAME = "index.faiss"
+# INDEX_FILENAME = "index.faiss" # Removed this unused constant
 MAPPING_FILENAME = "index_mapping.json"
 METADATA_FILENAME = "metadata_cache.json"
 SCHEMA_FILENAME = "schema.json"
