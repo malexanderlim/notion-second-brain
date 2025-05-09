@@ -8,7 +8,6 @@ Provides functions for:
 import logging
 import asyncio
 import numpy as np
-import faiss # Will be needed for search logic later
 import json
 from datetime import date, timedelta
 from typing import Optional

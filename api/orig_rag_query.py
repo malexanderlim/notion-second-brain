@@ -1,4 +1,4 @@
-import faiss
+# import faiss
 import json
 import os
 import logging
