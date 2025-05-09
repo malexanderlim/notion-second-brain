@@ -12,6 +12,12 @@ import time
 import glob # For handling file globs
 from datetime import datetime # Ensure datetime is imported
 
+# Attempt to import vercel_blob and handle if not installed
+try:
+    import vercel_blob
+except ImportError:
+    vercel_blob = None # Allows script to run if vercel_blob is not installed and not used
+
 # Adjust path to import from the package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
 
@@ -183,6 +189,11 @@ def main():
         action="store_true",
         help="Enable verbose logging (DEBUG level)."
     )
+    parser.add_argument(
+        "--upload-to-blob",
+        action="store_true",
+        help="Upload generated index files to Vercel Blob storage."
+    )
 
     args = parser.parse_args()
 
@@ -197,6 +208,7 @@ def main():
     logger.info(f"Last entry timestamp file: {args.last_entry_timestamp_file}") # Log new file
     logger.info(f"Force rebuild: {args.force_rebuild}")
     logger.info(f"Batch size: {BATCH_SIZE}")
+    logger.info(f"Upload to Vercel Blob: {args.upload_to_blob}") # Log the new argument
 
     # --- Resolve Input Files ---
     input_files = []
@@ -620,6 +632,65 @@ def main():
         else:
             logger.info("No last_edited_time was found in processed entries. Timestamp file not updated/created.")
 
+        # --- Vercel Blob Upload (Conditional) ---
+        if args.upload_to_blob:
+            logger.info("Upload to Vercel Blob requested.")
+            if not vercel_blob:
+                logger.error("Vercel Blob upload requested, but the \'vercel-blob\' library is not installed. Please install it first.")
+            else:
+                blob_token = os.getenv("BLOB_READ_WRITE_TOKEN")
+                if not blob_token:
+                    logger.error("BLOB_READ_WRITE_TOKEN environment variable not set. Cannot upload to Vercel Blob.")
+                else:
+                    logger.info("BLOB_READ_WRITE_TOKEN found. Proceeding with Vercel Blob upload...")
+                    # Initialize Vercel Blob client (usually done implicitly by library when token is set)
+                    # Example: vercel_blob.put(...) will use the env var by default.
+
+                    files_to_upload = [
+                        args.index_file,
+                        args.mapping_file,
+                        args.last_entry_timestamp_file
+                    ]
+                    # Conditionally add metadata_cache.json if it exists
+                    # Assuming METADATA_CACHE_FILE is defined similarly to other defaults
+                    METADATA_CACHE_FILE = "metadata_cache.json" # Define if not already
+                    SCHEMA_FILE = "schema.json" # Define if not already
+
+                    if os.path.exists(METADATA_CACHE_FILE):
+                        files_to_upload.append(METADATA_CACHE_FILE)
+                    else:
+                        logger.warning(f"Metadata cache file {METADATA_CACHE_FILE} not found, will not be uploaded.")
+                    
+                    # Add schema.json - assuming it's generated or placed in the root
+                    # The design doc mentions its handling is an open question.
+                    # For now, we'll try to upload if it exists, as per the task list.
+                    if os.path.exists(SCHEMA_FILE):
+                        files_to_upload.append(SCHEMA_FILE)
+                    else:
+                        logger.warning(f"Schema file {SCHEMA_FILE} not found, will not be uploaded.")
+
+                    all_uploads_successful = True
+                    for file_path in files_to_upload:
+                        if os.path.exists(file_path):
+                            try:
+                                with open(file_path, 'rb') as f_blob:
+                                    # The vercel_blob.put() function expects filename and then data
+                                    # The first argument to put() is the path in the blob store.
+                                    # We'll use the base filename as the path in the blob store.
+                                    blob_path_name = os.path.basename(file_path)
+                                    logger.info(f"Uploading {file_path} to Vercel Blob as {blob_path_name}...")
+                                    response = vercel_blob.put(blob_path_name, f_blob.read(), {"token": blob_token, "addRandomSuffix": "false"}) # Explicitly pass token
+                                    logger.info(f"Successfully uploaded {file_path} to Vercel Blob: {response.get('url')}")
+                            except Exception as e:
+                                logger.error(f"Failed to upload {file_path} to Vercel Blob: {e}", exc_info=True)
+                                all_uploads_successful = False
+                        else:
+                            logger.warning(f"File {file_path} not found, skipping upload to Vercel Blob.")
+                    
+                    if all_uploads_successful:
+                        logger.info("All requested files uploaded successfully to Vercel Blob.")
+                    else:
+                        logger.error("One or more files failed to upload to Vercel Blob.")
 
     logger.info("Index build/update process finished.")
 

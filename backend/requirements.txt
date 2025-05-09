@@ -12,4 +12,7 @@ anthropic
 fastapi-cors
 
 # For file uploads (e.g., for transcription)
-python-multipart 
+python-multipart
+
+# For Vercel Blob Storage
+vercel-blob 

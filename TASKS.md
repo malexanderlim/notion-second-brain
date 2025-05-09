@@ -422,6 +422,12 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 - `backend/` - Directory for backend API server code ✅
   - `backend/main.py`
 
+## Project-Specific Task Lists
+
+As the project grows, detailed task lists for major features or initiatives will be maintained in separate files within the `tasks/` directory to keep this main `TASKS.md` file concise and focused on overall progress and smaller, more general tasks.
+
+*   **Vercel Deployment:** See [`tasks/VERCEL_DEPLOYMENT_TASKS.md`](tasks/VERCEL_DEPLOYMENT_TASKS.md) for the detailed plan and tasks related to deploying the application to Vercel.
+
 ## Refactor cli.py for Enhanced Modularity and Maintainability
 
 The `cli.py` script has grown significantly and handles multiple distinct responsibilities. This refactoring effort aims to improve its structure, making it more modular, readable, and easier to maintain by separating concerns into dedicated modules.
