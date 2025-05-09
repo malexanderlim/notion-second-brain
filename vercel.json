@@ -15,7 +15,7 @@
   ],
   "functions": {
     "api/main.py": {
-      "excludeFiles": "**/__pycache__/**,**/*.pyc,.git/**,frontend/**,tests/**,venv/**,notion_second_brain/**,scripts/**,output/**,docs/**,.cursor/**,tasks/**,design/**,*.md,.gitignore,.DS_Store,start-backend.sh,start-frontend.sh,build_index.py,cli.py,enrich_notion.py,index.faiss,index_mapping.json,metadata_cache.json,schema.json,last_entry_update_timestamp.txt,audio_query_test.m4a,batch_export.log"
+      "excludeFiles": "**/__pycache__/**,**/*.pyc,.git/**,frontend/**,tests/**,venv/**,notion_second_brain/**,scripts/**,output/**,docs/**,.cursor/**,tasks/**,design/**,*.md,*.sh,*.py,*.log,*.m4a,index.faiss,index_mapping.json,metadata_cache.json,schema.json,last_entry_update_timestamp.txt,.gitignore,.DS_Store"
     }
   },
   "routes": [
