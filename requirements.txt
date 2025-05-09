@@ -1,11 +1,10 @@
 fastapi
 uvicorn[standard]
-python-dotenv
 
-# RAG Dependencies (will be needed soon)
+# RAG Dependencies
 openai
 faiss-cpu
-langchain
+# langchain # Removed, hoping RecursiveCharacterTextSplitter is covered by langchain-community
 langchain-community
 langchain-openai
 anthropic
@@ -13,9 +12,8 @@ anthropic
 # CORS
 fastapi-cors
 
-# For file uploads (e.g., for transcription)
-python-multipart
+# python-multipart # Removed as not used in API directory
 
 # For Vercel Blob Storage
-vercel-blob 
+vercel-blob
 # Updated to trigger re-install of dependencies 
