@@ -371,32 +371,35 @@ def initialize_pinecone_client(pinecone_api_key: str | None, pinecone_index_name
 def initialize_openai_client(api_key: str | None):
     """Initializes the OpenAI client using the provided API key."""
     global openai_client
+    logger.info("RAG_INITIALIZER: initialize_openai_client CALLED.") # New Log
+
     if openai_client:
-        logger.info("OpenAI client already initialized. Skipping.") # Added skipping
+        logger.info("RAG_INITIALIZER: OpenAI client already initialized. Skipping.")
         return
 
-    # Enhanced logging for the API key
     if not api_key:
-        logger.error("FATAL IN INITIALIZER: OpenAI API key was NOT provided (None or empty string). Cannot initialize.")
-        # We won't raise here to see if other logs appear, but this is a critical failure point.
-        return # Explicitly return if no key
+        logger.error("RAG_INITIALIZER: FATAL - OpenAI API key was NOT provided (None or empty string). Cannot initialize.")
+        return
     
     key_snippet = api_key[:4] + "..." + api_key[-4:] if len(api_key) > 8 else "key_too_short_to_snippet"
     logger.info(f"RAG_INITIALIZER: Attempting to initialize OpenAI client with API key snippet: {key_snippet}, type: {type(api_key)}")
 
     try:
-        logger.info("RAG_INITIALIZER: BEFORE OpenAI(api_key=...) call") # LOG BEFORE
-        temp_client = OpenAI(api_key=api_key) # Assign to temp var first
-        logger.info(f"RAG_INITIALIZER: AFTER OpenAI(api_key=...) call. temp_client is: {'SET' if temp_client else 'NOT SET'}") # LOG AFTER
+        logger.info("RAG_INITIALIZER: BEFORE OpenAI(api_key=...) call.")
+        temp_client = OpenAI(api_key=api_key)
+        logger.info(f"RAG_INITIALIZER: AFTER OpenAI(api_key=...) call. temp_client object: {str(temp_client)[:100]}...") # Log part of the object
         
-        openai_client = temp_client # Assign to global
-        logger.info(f"RAG_INITIALIZER: OpenAI client assigned to global. openai_client is: {'SET' if openai_client else 'NOT SET'}")
+        openai_client = temp_client
+        logger.info(f"RAG_INITIALIZER: OpenAI client assigned to global. openai_client object: {str(openai_client)[:100]}...") # Log part of the global object
+        if openai_client:
+            logger.info("RAG_INITIALIZER: OpenAI client successfully SET.")
+        else:
+            logger.error("RAG_INITIALIZER: OpenAI client is NONE after assignment.")
 
     except Exception as e:
         logger.error(f"RAG_INITIALIZER: FAILED to initialize OpenAI client during OpenAI(api_key=...) call: {e}", exc_info=True)
-        openai_client = None # Ensure it's None if init fails
-        # We are not re-raising here to allow the app to potentially start and log more, 
-        # but this is a critical failure for OpenAI functionality.
+        openai_client = None
+        logger.error("RAG_INITIALIZER: openai_client set to None due to exception.") # New Log
 
 def initialize_anthropic_client(api_key: str | None):
     """Initializes the Anthropic client using the provided API key."""
@@ -424,8 +427,11 @@ def initialize_anthropic_client(api_key: str | None):
 def get_openai_client():
     """Returns the initialized OpenAI client instance."""
     global openai_client
+    logger.info("RAG_INITIALIZER: get_openai_client CALLED.") # New Log
     if not openai_client:
-        logger.warning("get_openai_client() called but client is not initialized.")
+        logger.warning("RAG_INITIALIZER: get_openai_client() called but openai_client global is None.")
+    else:
+        logger.info(f"RAG_INITIALIZER: get_openai_client() returning openai_client object: {str(openai_client)[:100]}...") # New Log
     return openai_client
 
 def get_anthropic_client():

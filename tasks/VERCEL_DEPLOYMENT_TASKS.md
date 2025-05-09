@@ -102,5 +102,22 @@ This task list outlines the steps for deploying the Notion Second Brain applicat
     *   [ ] Regularly review Vercel password protection and access token security.
     *   [ ] Consider if any other security hardening is needed for the Vercel deployment.
 
+*   [x] **Fix `ModuleNotFoundError: No module named 'faiss'` (and subsequent `NameError`):**
+    *   [x] Remove `import faiss` from `api/rag_initializer.py`. (Done)
+    *   [x] Remove `import faiss` from `api/retrieval_logic.py`. (Done)
+    *   [x] Search entire codebase for "faiss" and remove/comment out any other active Python imports or usages.
+        *   [x] Deleted `api/orig_rag_query.py` (contained FAISS logic).
+        *   [x] Removed `INDEX_PATH` constant from `api/rag_config.py` and its import from `api/rag_query.py`.
+        *   [x] Removed `INDEX_FILENAME` constant from `api/rag_initializer.py`.
+*   [x] **Fix `RuntimeError: Form data requires "python-multipart" to be installed.`:**
+    *   [x] Add `python-multipart` to `requirements.txt`. (Done, by uncommenting)
+*   [x] **Fix `RuntimeError: Vercel Blob SDK not installed for remote data loading.`:**
+    *   [x] Add `vercel-blob` to `requirements.txt`. (Done, was already present)
+*   [ ] **Investigate and Fix `LLM client for provider 'openai' (model: gpt-4o-mini) is not initialized.` on Vercel:**
+    *   [ ] Add detailed logging to `api/rag_initializer.py` and `api/main.py` around `initialize_openai_client` and its usage.
+    *   [ ] Verify API key passing and client instantiation in the Vercel environment.
+*   [ ] **Fix `Error: Timestamp file not found. Sync may not have run yet.` on Vercel:**
+    *   [ ] This likely means `last_entry_update_timestamp.txt` is not being created or found by the `/api/last-updated` endpoint in the Vercel environment.
+
 ---
 *This task list is a starting point and can be refined as the implementation progresses.* 

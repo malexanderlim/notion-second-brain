@@ -174,27 +174,40 @@ async def handle_query(request: QueryRequest):
 @app.get("/api/last-updated", response_model=LastUpdatedResponse, tags=["General"])
 def get_last_updated_timestamp():
     """Retrieves the timestamp of the last successfully processed entry from the index build process."""
-    # The default path used in build_index.py. 
-    # Ensure this path is correct relative to where the backend server is run from.
-    # If build_index.py is at project root, and backend is in backend/, this path is relative to project root.
-    timestamp_file_path = "last_entry_update_timestamp.txt" # Assumes backend is run from project root
+    logger.info("API_MAIN: get_last_updated_timestamp CALLED.") # New Log
     
-    # More robust path (if backend/main.py is run directly from backend/ directory):
-    # timestamp_file_path = os.path.join(os.path.dirname(__file__), "..", "last_entry_update_timestamp.txt")
-    # For now, sticking to the simpler path, assuming execution from project root for uvicorn.
+    data_source_mode = os.getenv('DATA_SOURCE_MODE', 'local').lower()
+    logger.info(f"API_MAIN: DATA_SOURCE_MODE is '{data_source_mode}'.") # New Log
 
-    logger.info(f"Attempting to read last updated timestamp from: {timestamp_file_path}")
+    timestamp_file_path = "last_entry_update_timestamp.txt"
+    resolved_path = os.path.abspath(timestamp_file_path) # New Log: Get absolute path
+    logger.info(f"API_MAIN: Attempting to read last updated timestamp. Relative path: '{timestamp_file_path}', Resolved absolute path: '{resolved_path}'.") # Updated Log
     
-    if not os.path.exists(timestamp_file_path):
-        logger.warning(f"Timestamp file not found: {timestamp_file_path}")
+    # Log current working directory
+    logger.info(f"API_MAIN: Current working directory: '{os.getcwd()}'.") # New Log
+
+    # Log directory listing for debugging in Vercel
+    try:
+        base_dir_list = os.listdir(os.getcwd())
+        logger.info(f"API_MAIN: Listing current directory contents: {base_dir_list[:10]}") # Log first 10 items
+        api_dir_path = os.path.join(os.getcwd(), 'api')
+        if os.path.exists(api_dir_path):
+            api_dir_list = os.listdir(api_dir_path)
+            logger.info(f"API_MAIN: Listing 'api/' directory contents: {api_dir_list[:10]}")
+    except Exception as e_list:
+        logger.warning(f"API_MAIN: Could not list directory contents: {e_list}")
+
+    if not os.path.exists(resolved_path): # Use resolved_path
+        logger.warning(f"API_MAIN: Timestamp file NOT FOUND at resolved path: {resolved_path}")
         return LastUpdatedResponse(last_updated_timestamp=None, error="Timestamp file not found. Sync may not have run yet.")
     
+    logger.info(f"API_MAIN: Timestamp file FOUND at resolved path: {resolved_path}") # New Log
     try:
-        with open(timestamp_file_path, 'r', encoding='utf-8') as f:
+        with open(resolved_path, 'r', encoding='utf-8') as f: # Use resolved_path
             timestamp_str = f.read().strip()
         
         if not timestamp_str:
-            logger.warning(f"Timestamp file is empty: {timestamp_file_path}")
+            logger.warning(f"Timestamp file is empty: {resolved_path}")
             return LastUpdatedResponse(last_updated_timestamp=None, error="Timestamp file is empty.")
 
         # Basic validation (could be more robust, e.g., regex or parse with datetime)
@@ -202,7 +215,7 @@ def get_last_updated_timestamp():
         logger.info(f"Successfully retrieved timestamp: {timestamp_str}")
         return LastUpdatedResponse(last_updated_timestamp=timestamp_str)
     except Exception as e:
-        logger.error(f"Error reading or parsing timestamp file {timestamp_file_path}: {e}", exc_info=True)
+        logger.error(f"Error reading or parsing timestamp file {resolved_path}: {e}", exc_info=True)
         return LastUpdatedResponse(last_updated_timestamp=None, error=f"Error reading timestamp file: {str(e)}")
 
 @app.post("/api/transcribe", response_model=TranscriptionResponse, tags=["Transcription"])

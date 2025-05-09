@@ -93,8 +93,10 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
     # --- Check client initialization based on provider ---
     active_client = None
     if selected_model_config["provider"] == "openai":
+        logger.info(f"RAG_QUERY: Accessing rag_initializer.openai_client. Current value: {str(rag_initializer.openai_client)[:100]}...")
         active_client = rag_initializer.openai_client # Access via module
     elif selected_model_config["provider"] == "anthropic":
+        logger.info(f"RAG_QUERY: Accessing rag_initializer.anthropic_client. Current value: {str(rag_initializer.anthropic_client)[:100]}...")
         active_client = rag_initializer.anthropic_client # Access via module
     # Add other providers here
 
@@ -226,6 +228,7 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
     # Consider if embedding model choice should also be configurable
     embedding_input_tokens = 0 # Placeholder for embedding token count
     
+    logger.info(f"RAG_QUERY: Passing rag_initializer.openai_client to get_embedding. Current value: {str(rag_initializer.openai_client)[:100]}...")
     embedding_result = await get_embedding(
         text=user_query, 
         embedding_model_key=OPENAI_EMBEDDING_MODEL_ID, 
@@ -364,6 +367,7 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
     final_answer_output_tokens = 0
     llm_error_message = None
     
+    logger.info(f"RAG_QUERY: Passing clients to generate_final_answer. OpenAI: {str(rag_initializer.openai_client)[:100]}..., Anthropic: {str(rag_initializer.anthropic_client)[:100]}...")
     generated_answer, llm_input_tokens, llm_output_tokens, llm_error = await generate_final_answer(
         final_system_prompt=final_system_prompt,
         user_message_for_final_llm=user_message_for_final_llm,
