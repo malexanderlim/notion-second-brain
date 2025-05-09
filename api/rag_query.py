@@ -24,7 +24,7 @@ except ImportError:
     APIStatusError = None
     APIConnectionError = None
 
-from backend.rag_config import (
+from .rag_config import (
     INDEX_PATH,
     MAPPING_PATH,
     METADATA_CACHE_PATH,
@@ -38,16 +38,16 @@ from backend.rag_config import (
     EMBEDDING_RETRY_DELAY
 )
 
-from backend.query_analyzer import analyze_query_for_filters
-from backend.retrieval_logic import get_embedding, perform_faiss_search, apply_metadata_filters
-from backend.prompt_constructor import construct_final_prompts
-from backend.llm_interface import generate_final_answer
-from backend.cost_utils import calculate_estimated_cost
+from .query_analyzer import analyze_query_for_filters
+from .retrieval_logic import get_embedding, perform_faiss_search, apply_metadata_filters
+from .prompt_constructor import construct_final_prompts
+from .llm_interface import generate_final_answer
+from .cost_utils import calculate_estimated_cost
 
 # Import the rag_initializer module itself to access its globals dynamically
-import backend.rag_initializer as rag_initializer
+from . import rag_initializer
 # Functions from rag_initializer used by execute_rag_query_sync or other entry points
-from backend.rag_initializer import load_rag_data
+from .rag_initializer import load_rag_data
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:

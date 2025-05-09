@@ -17,14 +17,14 @@ from datetime import date, timedelta
 # from openai import RateLimitError, APIError # Assuming these are exceptions from the openai package
 
 # Import static configurations directly
-from backend.rag_config import (
+from .rag_config import (
     MODEL_CONFIG, 
     MAX_EMBEDDING_RETRIES, 
     EMBEDDING_RETRY_DELAY,
     OPENAI_EMBEDDING_MODEL_ID # If get_embedding's default model_key is used from here
 )
 # Import rag_initializer to access shared, stateful components like clients
-import backend.rag_initializer as rag_initializer
+from . import rag_initializer
 
 logger = logging.getLogger(__name__)
 

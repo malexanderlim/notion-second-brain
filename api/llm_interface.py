@@ -2,7 +2,7 @@ import logging
 import asyncio
 
 # Import rag_initializer to access shared, stateful components like clients and Anthropic class
-import backend.rag_initializer as rag_initializer
+from . import rag_initializer
 
 # Removed unused commented imports for specific API errors
 

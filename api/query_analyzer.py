@@ -11,9 +11,9 @@ import asyncio
 from datetime import date
 
 # Import MODEL_CONFIG directly as it's static configuration
-from backend.rag_config import MODEL_CONFIG 
+from .rag_config import MODEL_CONFIG
 # Import rag_initializer to access shared, stateful components like clients and data
-import backend.rag_initializer as rag_initializer
+from . import rag_initializer
 
 # Removed commented out notes regarding imports/dependencies
 
