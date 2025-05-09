@@ -8,6 +8,6 @@ export default defineConfig({
   plugins: [
     react(), 
     tailwindcss(),
-    tsconfigPaths()
+    tsconfigPaths({ projects: ['./tsconfig.app.json'] })
   ]
 })
