@@ -13,7 +13,7 @@ langchain-text-splitters
 # CORS
 fastapi-cors
 
-# python-multipart # Removed as not used in API directory
+python-multipart
 
 # For Vercel Blob Storage
 vercel-blob
