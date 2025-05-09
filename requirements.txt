@@ -5,7 +5,9 @@ python-dotenv
 # RAG Dependencies (will be needed soon)
 openai
 faiss-cpu
-# langchain # Or specific langchain components if preferred
+langchain
+langchain-community
+langchain-openai
 anthropic
 
 # CORS
