@@ -3,7 +3,7 @@ uvicorn[standard]
 
 # RAG Dependencies
 openai
-faiss-cpu
+# faiss-cpu # Temporarily commented out for size diagnosis
 # langchain # Removed, hoping RecursiveCharacterTextSplitter is covered by langchain-community
 langchain-community
 langchain-openai
