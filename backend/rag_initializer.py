@@ -4,6 +4,14 @@ import json
 import os
 import logging
 from datetime import date
+from pathlib import Path # Added for path manipulation
+
+# Added for Vercel Blob integration
+try:
+    from vercel_blob import download as vercel_download, VercelBlobException
+except ImportError:
+    vercel_download = None
+    VercelBlobException = None
 
 from openai import OpenAI
 try:
@@ -13,13 +21,21 @@ except ImportError:
 
 # Import configuration constants
 from backend.rag_config import (
-    INDEX_PATH,
-    MAPPING_PATH,
-    METADATA_CACHE_PATH,
-    DATABASE_SCHEMA_PATH
+    INDEX_PATH as DEFAULT_INDEX_FILENAME, # Renamed for clarity
+    MAPPING_PATH as DEFAULT_MAPPING_FILENAME, # Renamed for clarity
+    METADATA_CACHE_PATH as DEFAULT_METADATA_FILENAME, # Renamed for clarity
+    DATABASE_SCHEMA_PATH as DEFAULT_SCHEMA_FILENAME, # Renamed for clarity
 )
 
 logger = logging.getLogger(__name__)
+
+# --- Constants for file names (used for both local and remote) ---
+# These were previously directly used from rag_config, now centralized for easier reference
+INDEX_FILENAME = "index.faiss"
+MAPPING_FILENAME = "index_mapping.json"
+METADATA_FILENAME = "metadata_cache.json"
+SCHEMA_FILENAME = "schema.json"
+# Note: last_entry_update_timestamp.txt is not loaded by this module directly.
 
 # --- Globals managed by this initializer module ---
 # These will be imported and used by the main RAG logic (rag_query.py)
@@ -37,6 +53,7 @@ _rag_data_loaded = False
 def load_rag_data():
     """Loads necessary data for RAG: index, mapping (list), metadata cache, schema.
        Uses a flag to prevent reloading if already loaded.
+       Data can be loaded from local disk or Vercel Blob storage based on DATA_SOURCE_MODE.
     """
     global index, mapping_data_list, index_to_entry, distinct_metadata_values, schema_properties
     global _rag_data_loaded
@@ -46,27 +63,128 @@ def load_rag_data():
         return
 
     logger.info("--- Starting RAG Data Loading --- ")
+
+    data_source_mode = os.getenv('DATA_SOURCE_MODE', 'local').lower()
+    logger.info(f"DATA_SOURCE_MODE set to: {data_source_mode}")
+
+    # --- Determine base path for data files ---
+    # These will be the actual paths used for loading, whether local or remote (temp)
+    current_index_path: Path
+    current_mapping_path: Path
+    current_metadata_path: Path
+    current_schema_path: Path
+
+    if data_source_mode == 'remote':
+        if not vercel_download or not VercelBlobException:
+            logger.error("Fatal: Vercel Blob SDK (vercel-blob) is not installed, but DATA_SOURCE_MODE is 'remote'.")
+            raise RuntimeError("Vercel Blob SDK not installed for remote data loading.")
+
+        remote_tmp_dir = Path("/tmp/rag_data")
+        try:
+            remote_tmp_dir.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Ensured temporary directory for remote data: {remote_tmp_dir}")
+        except OSError as e:
+            logger.error(f"Fatal: Could not create temporary directory {remote_tmp_dir}: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to create temporary directory {remote_tmp_dir}") from e
+
+        blob_token = os.getenv("VERCEL_BLOB_ACCESS_TOKEN")
+        if not blob_token:
+            logger.error("Fatal: VERCEL_BLOB_ACCESS_TOKEN not set for remote data loading.")
+            raise RuntimeError("VERCEL_BLOB_ACCESS_TOKEN not set.")
+
+        # Define expected environment variables for blob URLs
+        # These URLs point to the specific files in Vercel Blob storage
+        file_env_vars_and_paths = {
+            INDEX_FILENAME: (os.getenv("FAISS_INDEX_BLOB_URL"), remote_tmp_dir / INDEX_FILENAME),
+            MAPPING_FILENAME: (os.getenv("MAPPING_JSON_BLOB_URL"), remote_tmp_dir / MAPPING_FILENAME),
+            METADATA_FILENAME: (os.getenv("METADATA_CACHE_BLOB_URL"), remote_tmp_dir / METADATA_FILENAME),
+            SCHEMA_FILENAME: (os.getenv("SCHEMA_JSON_BLOB_URL"), remote_tmp_dir / SCHEMA_FILENAME),
+        }
+
+        for filename, (url, local_tmp_path) in file_env_vars_and_paths.items():
+            if not url:
+                # For schema.json and metadata_cache.json, it might be optional if they don't exist.
+                # However, index and mapping are critical.
+                if filename in [INDEX_FILENAME, MAPPING_FILENAME]:
+                    logger.error(f"Fatal: Blob URL for critical file '{filename}' is not set in environment variables.")
+                    raise RuntimeError(f"Missing Blob URL for {filename}.")
+                else:
+                    logger.warning(f"Blob URL for optional file '{filename}' is not set. Will attempt to proceed without it if possible.")
+                    # Ensure the path points to something, even if it won't exist, so later checks handle it.
+                    if filename == METADATA_FILENAME: current_metadata_path = local_tmp_path 
+                    if filename == SCHEMA_FILENAME: current_schema_path = local_tmp_path
+                    continue # Skip download if URL is not set for optional files
+
+            logger.info(f"Downloading '{filename}' from Vercel Blob (URL: {url[:30]}...) to '{local_tmp_path}'...")
+            try:
+                vercel_download(url=url, path=local_tmp_path, token=blob_token)
+                logger.info(f"Successfully downloaded '{filename}' to '{local_tmp_path}'.")
+            except VercelBlobException as e:
+                logger.error(f"Fatal: Failed to download '{filename}' from Vercel Blob (URL: {url}): {e}", exc_info=True)
+                # If critical files fail, re-raise. For optional, we might allow proceeding.
+                if filename in [INDEX_FILENAME, MAPPING_FILENAME]:
+                    raise RuntimeError(f"Failed to download critical file {filename} from Vercel Blob.") from e
+                logger.warning(f"Could not download optional file {filename}. Will proceed without it.")
+            except Exception as e: # Catch any other unexpected errors during download
+                logger.error(f"Fatal: An unexpected error occurred downloading '{filename}' from Vercel Blob: {e}", exc_info=True)
+                if filename in [INDEX_FILENAME, MAPPING_FILENAME]:
+                    raise RuntimeError(f"Unexpected error downloading critical file {filename} from Vercel Blob.") from e
+                logger.warning(f"Unexpected error downloading optional file {filename}. Will proceed without it.")
+            
+            # Assign current paths after successful download or if optional and URL missing
+            if filename == INDEX_FILENAME: current_index_path = local_tmp_path
+            elif filename == MAPPING_FILENAME: current_mapping_path = local_tmp_path
+            elif filename == METADATA_FILENAME: current_metadata_path = local_tmp_path
+            elif filename == SCHEMA_FILENAME: current_schema_path = local_tmp_path
+        
+        # Check if critical paths were set (they would be if download succeeded or if URL was missing but error was raised)
+        if not 'current_index_path' in locals() or not 'current_mapping_path' in locals():
+             # This case should ideally be caught by earlier errors, but as a safeguard:
+            logger.error("Fatal: Critical data paths (index or mapping) were not established in remote mode.")
+            raise RuntimeError("Critical remote data paths not established.")
+        if not 'current_metadata_path' in locals(): # Ensure it's defined even if download failed/skipped for optional
+            current_metadata_path = remote_tmp_dir / METADATA_FILENAME
+        if not 'current_schema_path' in locals(): # Ensure it's defined
+            current_schema_path = remote_tmp_dir / SCHEMA_FILENAME
+
+
+    elif data_source_mode == 'local':
+        # In local mode, paths are relative to LOCAL_DATA_PATH or current dir by default
+        # `rag_config.py` provides default *filenames* (e.g., "index.faiss")
+        # `LOCAL_DATA_PATH` defaults to '.' (project root) if not set.
+        local_data_base_dir = Path(os.getenv('LOCAL_DATA_PATH', '.'))
+        logger.info(f"Local data path set to: {local_data_base_dir.resolve()}")
+
+        current_index_path = local_data_base_dir / DEFAULT_INDEX_FILENAME
+        current_mapping_path = local_data_base_dir / DEFAULT_MAPPING_FILENAME
+        current_metadata_path = local_data_base_dir / DEFAULT_METADATA_FILENAME
+        current_schema_path = local_data_base_dir / DEFAULT_SCHEMA_FILENAME
+    else:
+        logger.error(f"Fatal: Invalid DATA_SOURCE_MODE: '{data_source_mode}'. Must be 'local' or 'remote'.")
+        raise ValueError(f"Invalid DATA_SOURCE_MODE: {data_source_mode}")
+
+    # --- Load data using the determined paths ---
     try:
-        logger.info(f"Loading FAISS index from {INDEX_PATH}...")
-        index = faiss.read_index(INDEX_PATH)
+        logger.info(f"Loading FAISS index from {current_index_path}...")
+        index = faiss.read_index(str(current_index_path)) # faiss expects string path
         logger.info(f"Index loaded successfully. Total vectors: {index.ntotal}")
     except Exception as e:
-        logger.error(f"Fatal: Failed to load FAISS index from {INDEX_PATH}: {e}", exc_info=True)
-        raise RuntimeError(f"Could not load FAISS index from {INDEX_PATH}") from e
+        logger.error(f"Fatal: Failed to load FAISS index from {current_index_path}: {e}", exc_info=True)
+        raise RuntimeError(f"Could not load FAISS index from {current_index_path}") from e
 
     try:
-        logger.info(f"Loading index mapping list from {MAPPING_PATH}...")
-        with open(MAPPING_PATH, 'r') as f:
-            loaded_mapping_data = json.load(f) # Load into temporary var first
+        logger.info(f"Loading index mapping list from {current_mapping_path}...")
+        with open(current_mapping_path, 'r') as f:
+            loaded_mapping_data = json.load(f) 
             if not isinstance(loaded_mapping_data, list):
-                raise TypeError(f"{MAPPING_PATH} does not contain a JSON list.")
-        mapping_data_list = loaded_mapping_data # Assign to global var
+                raise TypeError(f"{current_mapping_path} does not contain a JSON list.")
+        mapping_data_list = loaded_mapping_data 
         logger.info(f"Mapping list loaded successfully. Total entries: {len(mapping_data_list)}")
 
         if index and len(mapping_data_list) != index.ntotal:
             logger.warning(f"Mismatch: FAISS index has {index.ntotal} vectors, but mapping list has {len(mapping_data_list)} entries. Assuming list order corresponds to index order, but this could cause issues.")
 
-        temp_index_to_entry = {} # Process into temporary var
+        temp_index_to_entry = {} 
         for i, entry in enumerate(mapping_data_list):
             if not isinstance(entry, dict):
                 logger.warning(f"Skipping non-dictionary item at index {i} in mapping list: {entry}")
@@ -83,24 +201,24 @@ def load_rag_data():
                     entry['entry_date'] = None
             
             temp_index_to_entry[i] = entry
-        index_to_entry = temp_index_to_entry # Assign to global var
+        index_to_entry = temp_index_to_entry 
         logger.info(f"Processed mapping list into index_to_entry lookup. Size: {len(index_to_entry)}")
             
     except FileNotFoundError:
-        logger.error(f"Fatal: Mapping file not found at {MAPPING_PATH}")
-        raise RuntimeError(f"Mapping file not found at {MAPPING_PATH}")
+        logger.error(f"Fatal: Mapping file not found at {current_mapping_path}")
+        raise RuntimeError(f"Mapping file not found at {current_mapping_path}")
     except (json.JSONDecodeError, TypeError) as e:
-        logger.error(f"Fatal: Failed to decode or process JSON list from {MAPPING_PATH}: {e}", exc_info=True)
-        raise RuntimeError(f"Failed to decode or process {MAPPING_PATH}") from e
+        logger.error(f"Fatal: Failed to decode or process JSON list from {current_mapping_path}: {e}", exc_info=True)
+        raise RuntimeError(f"Failed to decode or process {current_mapping_path}") from e
     except Exception as e:
-        logger.error(f"Fatal: An unexpected error occurred loading/processing mapping from {MAPPING_PATH}: {e}", exc_info=True)
-        raise RuntimeError(f"Unexpected error loading/processing {MAPPING_PATH}") from e
+        logger.error(f"Fatal: An unexpected error occurred loading/processing mapping from {current_mapping_path}: {e}", exc_info=True)
+        raise RuntimeError(f"Unexpected error loading/processing {current_mapping_path}") from e
 
     temp_distinct_metadata = {}
     try:
-        logger.info(f"Loading distinct metadata values from {METADATA_CACHE_PATH}...")
-        if os.path.exists(METADATA_CACHE_PATH):
-            with open(METADATA_CACHE_PATH, 'r') as f:
+        logger.info(f"Loading distinct metadata values from {current_metadata_path}...")
+        if current_metadata_path.exists(): # Use Path.exists()
+            with open(current_metadata_path, 'r') as f:
                 cache_content = json.load(f)
                 if "distinct_values" in cache_content and isinstance(cache_content["distinct_values"], dict):
                     loaded_distinct = cache_content["distinct_values"]
@@ -108,38 +226,38 @@ def load_rag_data():
                         if isinstance(loaded_distinct[key], list):
                              temp_distinct_metadata[key] = set(loaded_distinct[key])
                         else:
-                             temp_distinct_metadata[key] = loaded_distinct[key] # Keep as is if not list
+                             temp_distinct_metadata[key] = loaded_distinct[key] 
                     logger.info("Distinct metadata values (from 'distinct_values' key) processed and loaded.")
                 else:
-                    logger.warning(f"'{METADATA_CACHE_PATH}' does not contain a 'distinct_values' dictionary. Proceeding without specific distinct values.")
+                    logger.warning(f"'{current_metadata_path}' does not contain a 'distinct_values' dictionary. Proceeding without specific distinct values.")
         else:
-            logger.warning(f"Metadata cache file not found at {METADATA_CACHE_PATH}. Proceeding without it.")
+            logger.warning(f"Metadata cache file not found at {current_metadata_path}. Proceeding without it.")
     except Exception as e:
-        logger.error(f"Error loading metadata cache from {METADATA_CACHE_PATH}: {e}. Proceeding without cache.", exc_info=True)
-    distinct_metadata_values = temp_distinct_metadata # Assign to global var
+        logger.error(f"Error loading metadata cache from {current_metadata_path}: {e}. Proceeding without cache.", exc_info=True)
+    distinct_metadata_values = temp_distinct_metadata
 
     temp_schema_props = None
     try:
-        logger.info(f"Loading database schema from {DATABASE_SCHEMA_PATH}...")
-        if os.path.exists(DATABASE_SCHEMA_PATH):
-            with open(DATABASE_SCHEMA_PATH, 'r') as f:
+        logger.info(f"Loading database schema from {current_schema_path}...")
+        if current_schema_path.exists(): # Use Path.exists()
+            with open(current_schema_path, 'r') as f:
                 loaded_schema = json.load(f) 
                 if not isinstance(loaded_schema, dict):
-                     logger.error(f"Fatal: Content of {DATABASE_SCHEMA_PATH} is not a JSON dictionary.")
-                     raise TypeError(f"Schema file {DATABASE_SCHEMA_PATH} root is not a dictionary.")
+                     logger.error(f"Fatal: Content of {current_schema_path} is not a JSON dictionary.")
+                     raise TypeError(f"Schema file {current_schema_path} root is not a dictionary.")
                 temp_schema_props = loaded_schema
             logger.info("Database schema loaded.")
         else:
-            logger.warning(f"Database schema file not found at {DATABASE_SCHEMA_PATH}. Query analysis may be less accurate.")
+            logger.warning(f"Database schema file not found at {current_schema_path}. Query analysis may be less accurate.")
     except json.JSONDecodeError as e:
-        logger.error(f"Fatal: Error decoding JSON from {DATABASE_SCHEMA_PATH}: {e}", exc_info=True)
-        raise RuntimeError(f"Error decoding JSON from {DATABASE_SCHEMA_PATH}") from e
+        logger.error(f"Fatal: Error decoding JSON from {current_schema_path}: {e}", exc_info=True)
+        raise RuntimeError(f"Error decoding JSON from {current_schema_path}") from e
     except Exception as e:
-        logger.error(f"Fatal: Error loading schema from {DATABASE_SCHEMA_PATH}: {e}", exc_info=True)
-        raise RuntimeError(f"Error loading schema from {DATABASE_SCHEMA_PATH}") from e
-    schema_properties = temp_schema_props # Assign to global var
+        logger.error(f"Fatal: Error loading schema from {current_schema_path}: {e}", exc_info=True)
+        raise RuntimeError(f"Error loading schema from {current_schema_path}") from e
+    schema_properties = temp_schema_props 
     
-    _rag_data_loaded = True # Set flag after successful loading
+    _rag_data_loaded = True 
     logger.info("--- RAG Data Loading Complete --- ")
 
 def initialize_openai_client(api_key: str | None):

@@ -75,3 +75,37 @@ The CLI consistently provided the correct answer and sources, while the backend 
 *   **Check CORS Thoroughly:** Remember that browser preflight `OPTIONS` requests require explicit allowance in backend CORS configurations.
 *   **Prompt Engineering Matters:** Subtle differences in prompts, especially formatting instructions, can significantly impact the LLM's output structure.
 *   **Separate Concerns:** While refactoring from CLI to backend, meticulously verify that all relevant logic (including constants and prompt details) is transferred correctly. 
+
+## 8. Vercel Monorepo Deployment Learnings (Frontend + Python Backend)
+
+Deploying a monorepo with a Vite frontend (in `frontend/`) and a Python FastAPI backend (in `backend/`) to Vercel presented significant challenges, primarily around build configuration, path aliasing for the frontend, and Vercel's output directory expectations.
+
+*   **`.gitignore` is Critical:**
+    *   **Issue:** An overly broad rule (`lib/`) in the root `.gitignore` unintentionally excluded the `frontend/src/lib/` directory (containing `utils.ts`) from Git tracking. This led to `ENOENT: no such file or directory` errors during Vercel's `vite build` step, as the aliased module (`@/lib/utils`) was correctly resolved to a path, but the file itself was not present in the build environment.
+    *   **Learning:** Always meticulously audit `.gitignore` to ensure all necessary source code subdirectories are included, especially when adding new sub-projects or shared libraries within a monorepo.
+
+*   **Vite Path Alias Resolution on Vercel:**
+    *   **Issue:** Even with `frontend/src/lib/utils.ts` correctly tracked by Git, `vite build` on Vercel initially failed to resolve the `@/lib/utils` alias defined in `frontend/tsconfig.app.json` (`baseUrl: "."`, `paths: { "@/*": ["./src/*"] }`).
+    *   **Attempts & Learnings:**
+        1.  `vite-tsconfig-paths` plugin: This is the standard solution. Initial attempts without explicitly setting the `projects` option in `vite.config.ts` failed. Setting `tsconfigPaths({ projects: ['./tsconfig.app.json'] })` also failed, likely due to the then-hidden `.gitignore` issue masking true resolution problems.
+        2.  Manual `resolve.alias` in `vite.config.ts`: Various attempts to manually define `{ find: '@', replacement: path.resolve(__dirname, './src') }` or even hyper-specific aliases like `{ find: '@/lib/utils', replacement: path.resolve(__dirname, './src/lib/utils.ts') }` also hit roadblocks, often manifesting as either `ENOENT` (if Vite couldn't resolve the path to a file with an extension) or "Rollup failed to resolve import" (if the alias itself wasn't recognized).
+        3.  **Underlying Cause (Revealed after `.gitignore` fix):** The primary alias problem was the missing file. Once the file was present, `vite-tsconfig-paths` (with `projects` explicitly set) became the correct and working solution for alias resolution within the Vite build.
+
+*   **Vercel Build Configuration (`vercel.json`) for Monorepos:**
+    *   **Requirement:** For a monorepo with distinct frontend and backend builds, `vercel.json` is essential to define multiple `builds`. Relying on UI framework presets alone is insufficient.
+    *   **Frontend Build:** Using `"src": "frontend/package.json"` and `"use": "@vercel/static-build"` is appropriate. The `config.distDir` for this build tells `@vercel/static-build` where its output is *relative to its source directory* (e.g., `distDir: "dist"` means `frontend/dist`).
+
+*   **The "No Output Directory named 'dist' found" Error:**
+    *   **Issue:** After Vite successfully built the frontend to `frontend/dist/`, Vercel threw an error: "No Output Directory named 'dist' found".
+    *   **Cause:** Vercel's platform, especially with the "Other" framework preset, often defaults to looking for a *root-level* directory named `dist` (or `public`) for the final static assets, even if `builds[*].config.distDir` correctly points to a nested directory for an individual build step.
+    *   **Learning & Solution (The "Move Output" Strategy):**
+        1.  **Root `package.json`:** Create a `package.json` at the monorepo root.
+        2.  **`vercel-build` Script:** In this root `package.json`, define a `"vercel-build"` script (e.g., `"cd frontend && npm install && npm run build && cd .. && rm -rf dist && mv frontend/dist dist"`). This script handles the frontend build and then moves its output (`frontend/dist`) to a `dist` directory at the monorepo root.
+        3.  **Update `vercel.json`:**
+            *   Change the frontend build `"src"` to point to the root `"package.json"`.
+            *   Change its `config.distDir` to `"dist"` (as the `vercel-build` script now creates this at the root).
+        4.  **Vercel Project UI Settings:** Set the "Output Directory" in the UI to `dist` (or clear the override and let it default, as Vercel often finds a root `dist`).
+        5.  **Routing:** Ensure `routes` in `vercel.json` for SPA fallback now point relative to the new root `dist` (e.g., `"dest": "/index.html"`).
+    *   **Rationale:** This strategy makes the project structure conform to Vercel's apparent default expectation for a root-level output directory when the "Other" preset is used, resolving the platform-level error.
+
+*   **Iterative Debugging is Key:** Complex deployment issues often require isolating variables: first ensuring files are present (fixing `.gitignore`), then tackling alias resolution within the build tool (Vite), and finally addressing platform-level output directory expectations (Vercel). Each error message, however frustrating, provides a clue to the next layer of the problem. 
