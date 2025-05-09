@@ -49,8 +49,8 @@ Corresponds to TDD: `design/PINECONE_INTEGRATION_TDD.md`
 - [ ] **Phase 3: Testing**
   - [ ] 3.1. **Local Testing:**
     - [x] Run `build_index.py --force-rebuild` and verify data in Pinecone console. (Completed)
-    - [ ] Test RAG queries via FastAPI backend locally (using Postman or frontend).
-    - [x] Verify `cli.py --query \"...\"` functionality. (Completed)
+    - [x] Test RAG queries via FastAPI backend locally (using Postman or frontend).
+    - [x] Verify `cli.py --query "..."` functionality. (Completed)
   - [ ] 3.2. **Vercel Preview Deployment Testing:**
     - [ ] Deploy the branch to Vercel (preview environment).
     - [ ] Verify `build_index.py` can be run (if applicable to Vercel build, or run manually pointing to Vercel env). Often, indexing is a separate step before deployment or run via a one-off job. For Vercel, usually data is already in Pinecone.

@@ -21,12 +21,9 @@ from .rag_initializer import (
     initialize_pinecone_client,
     get_openai_client,
     get_anthropic_client,
-    get_retriever,
-    get_last_entry_update_timestamp,
     RAGSystemNotInitializedError,
     LLMClientNotInitializedError
 )
-from .rag_config import RAG_CONFIG # Relative import
 
 # Setup logger for the main application
 logger = logging.getLogger("api.main")

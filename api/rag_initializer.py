@@ -62,6 +62,9 @@ _rag_data_loaded = False
 class RAGSystemNotInitializedError(Exception):
     pass
 
+class LLMClientNotInitializedError(Exception):
+    pass
+
 def load_rag_data():
     """Loads necessary data for RAG: index, mapping (list), metadata cache, schema.
        Uses a flag to prevent reloading if already loaded.
