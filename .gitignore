@@ -97,3 +97,4 @@ metadata_cache.json
 *.log # Ignore log files if generated
 schema.json
 last_entry_update_timestamp.txt
+.vercel

@@ -1,0 +1,44 @@
+# Vercel ignore file
+
+# Git repository
+.git/**
+
+# Local virtual environment
+venv/**
+
+# Frontend source (assuming built separately)
+frontend/**
+
+# Local data/utility directories (if not needed by live API)
+notion_second_brain/**
+scripts/**
+output/**
+docs/**
+.cursor/**
+tasks/**
+design/**
+tests/**
+
+# Python bytecode cache
+**/__pycache__/**
+**/*.pyc
+
+# Root-level local data files (assuming loaded remotely by API)
+index.faiss
+index_mapping.json
+metadata_cache.json
+schema.json
+last_entry_update_timestamp.txt
+audio_query_test.m4a
+batch_export.log
+
+# Root-level local scripts
+build_index.py
+cli.py
+enrich_notion.py
+start-backend.sh
+start-frontend.sh
+
+# Other common files to ignore
+*.md
+.DS_Store 

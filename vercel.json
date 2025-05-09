@@ -13,11 +13,6 @@
       "use": "@vercel/python"
     }
   ],
-  "functions": {
-    "api/main.py": {
-      "excludeFiles": "{.git,venv,frontend,notion_second_brain}/**"
-    }
-  },
   "routes": [
     {
       "src": "/api/(.*)",
