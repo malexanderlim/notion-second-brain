@@ -3,11 +3,12 @@ uvicorn[standard]
 
 # RAG Dependencies
 openai
-# faiss-cpu # Temporarily commented out for size diagnosis
+# faiss-cpu # Replaced by Pinecone for Vercel deployment
 # langchain # Removed, hoping RecursiveCharacterTextSplitter is covered by langchain-community
 langchain-community
 langchain-openai
 anthropic
+langchain-text-splitters
 
 # CORS
 fastapi-cors
@@ -16,4 +17,5 @@ fastapi-cors
 
 # For Vercel Blob Storage
 vercel-blob
-# Updated to trigger re-install of dependencies 
+# Updated to trigger re-install of dependencies
+pinecone-client>=3.0.0,<4.0.0 

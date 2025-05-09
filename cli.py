@@ -22,14 +22,15 @@ from notion_second_brain.data_exporter import handle_export as run_export_action
 # from notion_second_brain.rag_pipeline import handle_query as run_query_action # Removed old import
 
 # Imports for RAG logic and initialization
-from backend.rag_query import execute_rag_query_sync as run_query_action
-from backend.rag_initializer import (
+from api.rag_query import execute_rag_query_sync as run_query_action
+from api.rag_initializer import (
     load_rag_data,
     initialize_openai_client,
-    initialize_anthropic_client
+    initialize_anthropic_client,
+    initialize_pinecone_client
 )
 # DEFAULT_FINAL_ANSWER_MODEL_KEY can be imported from rag_config if needed for help text
-from backend.rag_config import DEFAULT_FINAL_ANSWER_MODEL_KEY
+from api.rag_config import DEFAULT_FINAL_ANSWER_MODEL_KEY
 
 # --- RAG Constants --- # MOVED to rag_pipeline.py
 # INDEX_FILE = "index.faiss"
@@ -340,8 +341,20 @@ def main():
     logger.info("Initializing LLM clients...")
     initialize_openai_client(config.OPENAI_API_KEY)
     # Safely get ANTHROPIC_API_KEY, pass None if not found
-    initialize_anthropic_client(getattr(config, 'ANTHROPIC_API_KEY', None)) 
-    logger.info("LLM clients initialized (if keys were provided).")
+    initialize_anthropic_client(getattr(config, 'ANTHROPIC_API_KEY', None))
+    logger.info("Initializing Pinecone client for CLI...")
+
+    # Debug log to check config values
+    pinecone_key_from_config = getattr(config, 'PINECONE_API_KEY', None)
+    pinecone_index_from_config = getattr(config, 'PINECONE_INDEX_NAME', None)
+    logger.debug(f"CLI: Pinecone Key from config: {'SET' if pinecone_key_from_config else 'NOT SET'}")
+    logger.debug(f"CLI: Pinecone Index from config: {'SET' if pinecone_index_from_config else 'NOT SET'}")
+
+    initialize_pinecone_client(
+        pinecone_key_from_config,
+        pinecone_index_from_config
+    )
+    logger.info("LLM and Pinecone clients initialized (if keys were provided).")
 
     # --- Action Dispatch --- 
     if args.query:

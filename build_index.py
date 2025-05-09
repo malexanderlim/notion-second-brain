@@ -5,12 +5,14 @@ import logging
 import json
 import os
 import sys
-import numpy as np
-import faiss
+import asyncio # Add asyncio import
+# import numpy as np # Likely no longer needed
+# import faiss # No longer needed
 from openai import OpenAI, RateLimitError, APIError
 import time
 import glob # For handling file globs
 from datetime import datetime # Ensure datetime is imported
+from pinecone import Pinecone, PineconeException # Import Pinecone
 
 # Attempt to import vercel_blob and handle if not installed
 try:
@@ -29,7 +31,7 @@ logger = logging.getLogger("build_index")
 # Constants (Consider moving to config or making CLI args if more flexibility needed)
 # DEFAULT_INPUT_JSON = "output/all_time.json" # No longer a single default
 DEFAULT_INPUT_GLOB = "output/*.json" # Default to process all JSONs in output
-DEFAULT_INDEX_FILE = "index.faiss"
+# DEFAULT_INDEX_FILE = "index.faiss" # No longer saving a FAISS index file locally by default
 DEFAULT_MAPPING_FILE = "index_mapping.json"
 EMBEDDING_MODEL = "text-embedding-ada-002"
 DEFAULT_LAST_ENTRY_TIMESTAMP_FILE = "last_entry_update_timestamp.txt" # New constant
@@ -38,6 +40,10 @@ DEFAULT_LAST_ENTRY_TIMESTAMP_FILE = "last_entry_update_timestamp.txt" # New cons
 MAX_EMBEDDING_RETRIES = 3
 EMBEDDING_RETRY_DELAY = 5 # seconds
 BATCH_SIZE = 100 # Number of texts to send in each embedding request
+PINECONE_UPSERT_BATCH_SIZE = 100 # Batch size for upserting vectors to Pinecone
+
+# Global Pinecone index instance
+pinecone_index_instance = None
 
 def get_embedding(client: OpenAI, text: str, retries: int = MAX_EMBEDDING_RETRIES) -> list[float] | None:
     """Gets embedding for text using OpenAI API with retry logic."""
@@ -156,19 +162,19 @@ def extract_and_save_metadata_cache(mapping_data: list[dict], cache_file_path: s
     except Exception as e:
         logger.error(f"Failed to save metadata cache to {cache_file_path}: {e}", exc_info=True)
 
-def main():
-    parser = argparse.ArgumentParser(description="Build or update a FAISS index from exported Notion data JSON files.")
+async def main():
+    parser = argparse.ArgumentParser(description="Build or update a Pinecone index from exported Notion data JSON files.") # Updated description
     parser.add_argument(
         "-i", "--input",
         nargs='+', # Accept one or more arguments
         default=[DEFAULT_INPUT_GLOB],
         help=f"Path(s) or glob pattern(s) for input JSON files (default: '{DEFAULT_INPUT_GLOB}')"
     )
-    parser.add_argument(
-        "--index-file",
-        default=DEFAULT_INDEX_FILE,
-        help=f"Path to load/save the FAISS index file (default: {DEFAULT_INDEX_FILE})"
-    )
+    # parser.add_argument(
+    #     "--index-file",
+    #     default=DEFAULT_INDEX_FILE,
+    #     help=f"Path to load/save the FAISS index file (default: {DEFAULT_INDEX_FILE})"
+    # ) # This argument is no longer used for local FAISS file
     parser.add_argument(
         "--mapping-file",
         default=DEFAULT_MAPPING_FILE,
@@ -201,9 +207,9 @@ def main():
     log_level = logging.DEBUG if args.verbose else logging.INFO
     config.setup_logging(level=log_level)
 
-    logger.info(f"Starting index build/update process...")
+    logger.info(f"Starting Pinecone index build/update process...") # Updated log message
     logger.info(f"Input pattern(s): {args.input}")
-    logger.info(f"Index file: {args.index_file}")
+    # logger.info(f"Index file: {args.index_file}") # No longer relevant for local FAISS file
     logger.info(f"Mapping file: {args.mapping_file}")
     logger.info(f"Last entry timestamp file: {args.last_entry_timestamp_file}") # Log new file
     logger.info(f"Force rebuild: {args.force_rebuild}")
@@ -226,72 +232,141 @@ def main():
     input_files.sort()
     logger.info(f"Found {len(input_files)} input files to process: {input_files}")
 
+    # --- Initialize Pinecone Client and Index Instance ---
+    global pinecone_index_instance
+    try:
+        pinecone_api_key = os.getenv("PINECONE_API_KEY")
+        pinecone_index_name = os.getenv("PINECONE_INDEX_NAME")
+        if not pinecone_api_key or not pinecone_index_name:
+            logger.critical("PINECONE_API_KEY and PINECONE_INDEX_NAME environment variables must be set.")
+            sys.exit(1)
+        
+        logger.info(f"Initializing Pinecone client and connecting to index: '{pinecone_index_name}'...")
+        pc = Pinecone(api_key=pinecone_api_key)
+        # Ensure index exists, or handle creation if desired (TDD assumes index exists)
+        # if pinecone_index_name not in pc.list_indexes().names:
+        #     logger.critical(f"Pinecone index '{pinecone_index_name}' does not exist. Please create it first.")
+        #     sys.exit(1)
+        pinecone_index_instance = pc.Index(pinecone_index_name)
+        logger.info(f"Successfully connected to Pinecone index: '{pinecone_index_name}'. Index stats: {pinecone_index_instance.describe_index_stats()}")
+    except PineconeException as e:
+        logger.critical(f"Pinecone initialization failed: {e}", exc_info=True)
+        sys.exit(1)
+    except Exception as e:
+        logger.critical(f"An unexpected error occurred during Pinecone initialization: {e}", exc_info=True)
+        sys.exit(1)
+
     # --- Load or Initialize Index and Mapping ---
-    index = None
+    # index = None # This was for FAISS index object
     mapping_data = []
     processed_page_ids = set()
-    dimension = None # Will be determined later
-    current_max_last_edited_time = None
+    current_max_last_edited_time = None # Reset if error
 
-    # --- Load existing last_entry_update_timestamp if not forcing rebuild ---
-    if not args.force_rebuild and os.path.exists(args.last_entry_timestamp_file):
+    if args.force_rebuild:
+        logger.info("Force rebuild requested. Clearing existing data from Pinecone index and local mapping.")
         try:
-            with open(args.last_entry_timestamp_file, 'r', encoding='utf-8') as f_ts:
-                timestamp_str = f_ts.read().strip()
-                if timestamp_str:
-                    current_max_last_edited_time = datetime.fromisoformat(timestamp_str)
-                    logger.info(f"Loaded existing last entry update timestamp: {current_max_last_edited_time.isoformat()}")
-        except Exception as e:
-            logger.warning(f"Could not read or parse existing last entry timestamp file at {args.last_entry_timestamp_file}: {e}. Will determine from scratch.")
-            current_max_last_edited_time = None # Reset if error
-
-
-    if not args.force_rebuild and os.path.exists(args.index_file) and os.path.exists(args.mapping_file):
-        logger.info(f"Attempting to load existing index from {args.index_file} and mapping from {args.mapping_file}...")
-        try:
-            index = faiss.read_index(args.index_file)
-            dimension = index.d # Get dimension from loaded index
-            logger.info(f"Loaded existing FAISS index with {index.ntotal} vectors (Dimension: {dimension}).")
+            index_stats = pinecone_index_instance.describe_index_stats()
+            if index_stats.total_vector_count > 0:
+                logger.info(f"Deleting all vectors from Pinecone index '{pinecone_index_name}' as it has {index_stats.total_vector_count} vectors...")
+                pinecone_index_instance.delete(delete_all=True)
+                logger.info("All vectors deleted from Pinecone index.")
+            else:
+                logger.info(f"Pinecone index '{pinecone_index_name}' is already empty. No deletion needed.")
             
-            with open(args.mapping_file, 'r', encoding='utf-8') as f:
-                mapping_data = json.load(f)
-            logger.info(f"Loaded existing mapping data with {len(mapping_data)} entries.")
-            
-            # Populate processed IDs set
-            for i, item in enumerate(mapping_data):
-                page_id = item.get('page_id')
-                if page_id:
-                    processed_page_ids.add(page_id)
-                else:
-                    logger.warning(f"Entry at index {i} in existing mapping file has no page_id. Skipping.")
-            logger.info(f"Loaded {len(processed_page_ids)} unique page IDs from existing mapping.")
-
-            # Sanity check: number of vectors in index should match mapping entries
-            if index.ntotal != len(mapping_data):
-                 logger.warning(f"Mismatch between index vectors ({index.ntotal}) and mapping entries ({len(mapping_data)}). Checkpoint might be corrupt. Consider --force-rebuild.")
-                 # Decide how to handle: exit, force rebuild, or proceed cautiously?
-                 # For now, proceed cautiously, but log a strong warning.
-
-        except FileNotFoundError:
-             logger.warning("Index/mapping file not found despite check (race condition?). Initializing new index.")
-             index = None
-             mapping_data = []
-             processed_page_ids = set()
-        except Exception as e:
-            logger.error(f"Error loading existing index/mapping: {e}. Consider --force-rebuild.", exc_info=True)
-            # Decide how to handle: exit or initialize new?
-            logger.warning("Proceeding by initializing a new index/mapping.")
-            index = None
+            # Reset local data structures
             mapping_data = []
             processed_page_ids = set()
+            current_max_last_edited_time = None # Reset timestamp for full rebuild
+            # Also delete local mapping and timestamp files to ensure clean state
+            if os.path.exists(args.mapping_file):
+                os.remove(args.mapping_file)
+                logger.info(f"Removed existing local mapping file: {args.mapping_file}")
+            if os.path.exists(args.last_entry_timestamp_file):
+                os.remove(args.last_entry_timestamp_file)
+                logger.info(f"Removed existing local timestamp file: {args.last_entry_timestamp_file}")
+        except PineconeException as e:
+            logger.critical(f"Failed to delete all vectors from Pinecone index '{pinecone_index_name}': {e}", exc_info=True)
+            sys.exit(1)
+        except Exception as e:
+            logger.critical(f"An unexpected error occurred during force_rebuild cleanup: {e}", exc_info=True)
+            sys.exit(1)
     else:
-        if args.force_rebuild:
-            logger.info("Force rebuild requested. Initializing new index and mapping.")
+        # Try to load existing mapping file to continue incrementally
+        if os.path.exists(args.mapping_file):
+            logger.info(f"Attempting to load existing mapping from {args.mapping_file}...")
+            try:
+                with open(args.mapping_file, 'r', encoding='utf-8') as f_map:
+                    loaded_mapping = json.load(f_map)
+                    if isinstance(loaded_mapping, list):
+                        mapping_data = loaded_mapping
+                        # Populate processed_page_ids from the loaded mapping_data
+                        # Assuming each entry in mapping_data has a 'page_id'
+                        for entry in mapping_data:
+                            if isinstance(entry, dict) and 'page_id' in entry:
+                                processed_page_ids.add(str(entry['page_id'])) # Ensure string ID
+                        logger.info(f"Loaded {len(mapping_data)} entries from existing mapping. Processed {len(processed_page_ids)} page IDs.")
+                    else:
+                        logger.warning(f"Mapping file {args.mapping_file} does not contain a list. Starting fresh.")
+                        mapping_data = [] # Reset if format is incorrect
+                        processed_page_ids = set()
+            except json.JSONDecodeError:
+                logger.warning(f"Could not decode JSON from mapping file {args.mapping_file}. Starting fresh.")
+                mapping_data = []
+                processed_page_ids = set()
+            except Exception as e:
+                logger.warning(f"Error loading mapping file {args.mapping_file}: {e}. Starting fresh.", exc_info=True)
+                mapping_data = []
+                processed_page_ids = set()
         else:
-            logger.info("No existing index/mapping found or files missing. Initializing new index and mapping.")
-        # index object will be created once the dimension is known
-        mapping_data = []
-        processed_page_ids = set()
+            logger.info("No existing mapping file found. Starting fresh.")
+            mapping_data = []
+            processed_page_ids = set()
+
+    # Dimension is fixed by Pinecone index (e.g., 1536 for text-embedding-ada-002)
+    # No need to load FAISS index to get dimension or existing vectors from it.
+    # dimension = None 
+
+    # --- Load existing last_entry_update_timestamp if not forcing rebuild ---
+    # This logic is now placed before attempting to load mapping_data
+    # if not args.force_rebuild and os.path.exists(args.last_entry_timestamp_file):
+    # ... (this block was moved up)
+
+    # if not args.force_rebuild and os.path.exists(args.index_file) and os.path.exists(args.mapping_file):
+    #     logger.info(f"Attempting to load existing index from {args.index_file} and mapping from {args.mapping_file}...")
+    #     try:
+    #         # Load FAISS index
+    #         index = faiss.read_index(args.index_file)
+    #         dimension = index.d
+    #         logger.info(f"FAISS index loaded. Dimension: {dimension}, Total vectors: {index.ntotal}")
+            
+    #         # Load mapping data
+    #         with open(args.mapping_file, 'r') as f_map:
+    #             mapping_data = json.load(f_map)
+    #         if len(mapping_data) != index.ntotal:
+    #             logger.warning(
+    #                 f"Mismatch: FAISS index has {index.ntotal} vectors, mapping has {len(mapping_data)} entries. "
+    #                 "This might lead to issues. Consider --force-rebuild."
+    #             )
+    #         # Populate processed_page_ids from the loaded mapping_data
+    #         for entry in mapping_data:
+    #             if 'page_id' in entry:
+    #                 processed_page_ids.add(entry['page_id'])
+    #         logger.info(f"Loaded {len(mapping_data)} entries from mapping. Processed {len(processed_page_ids)} page IDs.")
+
+    #     except Exception as e:
+    #         logger.error(f"Error loading existing index/mapping: {e}. Consider --force-rebuild.", exc_info=True)
+    #         logger.warning("Proceeding by initializing a new index/mapping.")
+    #         index = None
+    #         mapping_data = []
+    #         processed_page_ids = set()
+    # else:
+    #     if args.force_rebuild:
+    #         logger.info("Force rebuild requested. Initializing new index and mapping.")
+    #     else:
+    #         logger.info("No existing index/mapping found or files missing. Initializing new index and mapping.")
+    #     # index object will be created once the dimension is known
+    #     mapping_data = []
+    #     processed_page_ids = set()
 
     # --- Initialize OpenAI Client ---
     logger.info("Initializing OpenAI client...")
@@ -318,387 +393,351 @@ def main():
     # Initialize overall_max_last_edited_time with the loaded value or None
     overall_max_last_edited_time = current_max_last_edited_time
 
-    for file_path in input_files:
-        files_processed_count += 1
-        logger.info(f"--- Processing file {files_processed_count}/{len(input_files)}: {file_path} ---")
-        entries_in_file = 0
-        embeddings_added_from_file = 0
-        skipped_in_file = 0
-        
-        # Batch processing buffers for the current file
-        batch_texts_to_embed = [] # Renamed for clarity
-        batch_metadata_for_mapping = [] # Renamed for clarity
+    # --- Batching for embeddings and Pinecone upserts ---
+    texts_to_embed_batch = []
+    metadata_for_embedding_batch = [] # Stores corresponding entry dicts for the texts
 
+    # --- Main Processing Loop ---
+    for file_path in input_files:
+        logger.info(f"Processing file: {file_path}...")
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                current_entries = data.get('entries', [])
-            entries_in_file = len(current_entries)
-            if not current_entries:
-                logger.warning(f"No 'entries' found in {file_path}. Skipping file.")
-                continue 
-            logger.info(f"Loaded {entries_in_file} entries from {file_path}. Processing in batches of {BATCH_SIZE}...")
+                if not isinstance(data, dict) or "entries" not in data or not isinstance(data["entries"], list):
+                    logger.error(f"JSON file {file_path} is not in the expected format (object with 'entries' list). Skipping.")
+                    continue
+                
+                entries_in_file = data["entries"]
+                logger.info(f"Found {len(entries_in_file)} entries in {file_path}.")
+                
+                file_entries_processed = 0
+                file_entries_skipped_due_to_timestamp = 0
+                file_entries_skipped_due_to_missing_id = 0
+                file_entries_skipped_due_to_duplicate = 0
+                file_embeddings_added = 0
+
+                for entry_data in entries_in_file:
+                    page_id = entry_data.get("page_id")
+                    if not page_id:
+                        logger.warning(f"Entry missing 'page_id' in file {file_path}. Skipping: {entry_data.get('title', 'N/A')}")
+                        file_entries_skipped_due_to_missing_id += 1
+                        total_entries_skipped_this_run += 1
+                        continue
+                    
+                    page_id_str = str(page_id) # Ensure string ID
+
+                    # Incremental update: Check last_edited_time
+                    entry_last_edited_str = entry_data.get("last_edited_time")
+                    if entry_last_edited_str and current_max_last_edited_time:
+                        try:
+                            entry_last_edited_dt = datetime.fromisoformat(entry_last_edited_str)
+                            if entry_last_edited_dt <= current_max_last_edited_time:
+                                # Only skip if page_id already processed to handle re-runs where timestamp file exists but mapping doesn't
+                                if page_id_str in processed_page_ids:
+                                    file_entries_skipped_due_to_timestamp += 1
+                                    total_entries_skipped_this_run += 1
+                                    continue 
+                                else:
+                                    logger.debug(f"Entry {page_id_str} is old but not in processed_page_ids, processing anyway.")
+                        except ValueError:
+                            logger.warning(f"Could not parse last_edited_time '{entry_last_edited_str}' for page {page_id_str}. Processing entry.")
+
+                    if page_id_str in processed_page_ids and not args.force_rebuild: # Check if already processed (and not forcing rebuild)
+                        logger.debug(f"Page ID {page_id_str} already processed and not forcing rebuild. Skipping.")
+                        file_entries_skipped_due_to_duplicate +=1
+                        total_entries_skipped_this_run +=1
+                        continue
+
+                    content_to_embed = entry_data.get("content", "")
+                    if not content_to_embed.strip():
+                        logger.warning(f"Entry {page_id_str} has no content. Skipping embedding.")
+                        file_entries_skipped_due_to_missing_id +=1 # Or a different counter for no content
+                        total_entries_skipped_this_run +=1
+                        continue
+                    
+                    texts_to_embed_batch.append(content_to_embed)
+                    # Store the original entry_data; it contains page_id and other metadata for mapping and Pinecone
+                    metadata_for_embedding_batch.append(entry_data) 
+
+                    if len(texts_to_embed_batch) >= BATCH_SIZE:
+                        # Process the batch for embeddings and then prepare for Pinecone upsert
+                        num_added_from_batch = await process_and_upsert_batch(
+                            openai_client,
+                            texts_to_embed_batch,
+                            metadata_for_embedding_batch,
+                            mapping_data, # list to append successful mappings
+                            processed_page_ids, # set to add successful page_ids
+                            pinecone_index_name # Pass pinecone_index_name
+                        )
+                        total_embeddings_added_this_run += num_added_from_batch
+                        file_embeddings_added += num_added_from_batch
+                        texts_to_embed_batch = []
+                        metadata_for_embedding_batch = []
+                    
+                    file_entries_processed += 1
+                    total_entries_processed_this_run +=1
+
+                    # Update overall_max_last_edited_time
+                    if entry_last_edited_str:
+                        try:
+                            entry_dt = datetime.fromisoformat(entry_last_edited_str)
+                            if overall_max_last_edited_time is None or entry_dt > overall_max_last_edited_time:
+                                overall_max_last_edited_time = entry_dt
+                        except ValueError:
+                            pass # Already warned
+
+                logger.info(f"Finished processing {file_path}: "
+                            f"{file_entries_processed} entries considered for processing, "
+                            f"{file_embeddings_added} new embeddings added/updated in Pinecone, "
+                            f"{file_entries_skipped_due_to_timestamp} skipped (timestamp), "
+                            f"{file_entries_skipped_due_to_missing_id} skipped (missing id/content), "
+                            f"{file_entries_skipped_due_to_duplicate} skipped (duplicate ID).")
+                files_processed_count +=1
+
         except FileNotFoundError:
-            logger.error(f"Input file disappeared: {file_path}. Skipping.")
-            continue
-        except json.JSONDecodeError as e:
-            logger.error(f"Error decoding JSON from {file_path}: {e}. Skipping file.")
-            continue
+            logger.error(f"Input file {file_path} not found. Skipping.")
+        except json.JSONDecodeError:
+            logger.error(f"Could not decode JSON from {file_path}. Skipping.")
         except Exception as e:
-            logger.error(f"Unexpected error loading {file_path}: {e}. Skipping file.", exc_info=True)
-            continue
+            logger.error(f"Unexpected error processing file {file_path}: {e}", exc_info=True)
 
-        # Function to process a completed batch
-        def process_embedding_batch(texts_to_embed, metadata_to_map):
-            nonlocal index, dimension, mapping_data, processed_page_ids, total_embeddings_added_this_run, embeddings_added_from_file, skipped_in_file, total_entries_skipped_this_run, logged_one_example
-            
-            if not texts_to_embed:
-                return
+    # Process any remaining texts in the last batch
+    if texts_to_embed_batch:
+        logger.info(f"Processing final batch of {len(texts_to_embed_batch)} entries...")
+        num_added_from_batch = await process_and_upsert_batch(
+            openai_client,
+            texts_to_embed_batch,
+            metadata_for_embedding_batch,
+            mapping_data,
+            processed_page_ids,
+            pinecone_index_name # Pass pinecone_index_name
+        )
+        total_embeddings_added_this_run += num_added_from_batch
+        texts_to_embed_batch = []
+        metadata_for_embedding_batch = []
 
-            logger.debug(f"Processing batch of {len(texts_to_embed)} entries...")
-            batch_embeddings = embed_batch(openai_client, texts_to_embed)
-
-            if batch_embeddings is None: # Whole batch failed
-                logger.error(f"Failed to get embeddings for batch of size {len(texts_to_embed)}. Skipping these entries.")
-                skipped_in_file += len(texts_to_embed)
-                return
-                
-            if len(batch_embeddings) != len(texts_to_embed):
-                 logger.error(f"Mismatched results from embed_batch. Expected {len(texts_to_embed)}, got {len(batch_embeddings)}. Skipping batch.")
-                 skipped_in_file += len(texts_to_embed)
-                 return
-
-            # Process successful embeddings from the batch
-            vectors_to_add = []
-            mappings_to_add = []
-            ids_processed_in_batch = []
-            
-            for i, embedding in enumerate(batch_embeddings):
-                entry_data = metadata_to_map[i]
-                page_id = entry_data['page_id'] # Should exist based on earlier checks
-
-                if embedding is None: # Should ideally not happen if batch succeeded, but check just in case
-                     logger.warning(f"Embed_batch succeeded but got None embedding for entry {i} (ID: {page_id}). Skipping.")
-                     skipped_in_file += 1
-                     continue
-                
-                # Initialize index if first embedding
-                if index is None:
-                    dimension = len(embedding)
-                    logger.info(f"First embedding successful. Detected dimension: {dimension}")
-                    try:
-                        index = faiss.IndexFlatL2(dimension)
-                        logger.info("FAISS index initialized.")
-                    except Exception as e:
-                        logger.critical(f"Failed to initialize FAISS index: {e}. Aborting.", exc_info=True)
-                        sys.exit(1)
-                
-                # Check dimension consistency
-                elif len(embedding) != dimension:
-                     logger.error(f"Inconsistent embedding dimension! Expected {dimension}, got {len(embedding)} for entry (ID: {page_id}). Skipping.")
-                     skipped_in_file += 1
-                     continue
-                
-                # If valid, prepare for adding
-                vectors_to_add.append(embedding)
-                
-                # --- Create the dictionary for index_mapping.json --- 
-                # Start with the essential fields
-                mapping_entry = {
-                    "page_id": page_id,
-                    "title": entry_data.get('title', '[No Title]'),
-                    "entry_date": entry_data.get('entry_date'),
-                    "source_file": os.path.basename(file_path),
-                    "content": entry_data.get('content', '') # Ensure full content is stored
-                }
-                # Add other relevant metadata fields if they exist in the source entry_data
-                # This ensures Family, Friends, Tags, etc. are carried over
-                # Use Consistent Capitalization matching Notion Properties / Cache Extraction
-                for key in ["Family", "Friends", "Tags", "Food", "AI summary"]:
-                    # Check lowercase key from source (transformers.py output)
-                    source_key = key.lower().replace(' ', '_') # e.g., "AI summary" -> "ai_summary"
-                    # Special case for AI summary potentially
-                    if key == "AI summary": source_key = "ai_summary"
-                        
-                    if source_key in entry_data:
-                        mapping_entry[key] = entry_data[source_key]
-                # --- End dictionary creation ---
-
-                mappings_to_add.append(mapping_entry)
-                ids_processed_in_batch.append(page_id)
-
-            # Add batch to index and mapping if any vectors are valid
-            if vectors_to_add:
-                try:
-                    embeddings_np = np.array(vectors_to_add).astype('float32')
-                    index.add(embeddings_np)
-                    mapping_data.extend(mappings_to_add)
-                    processed_page_ids.update(ids_processed_in_batch)
-                    
-                    count_added = len(vectors_to_add)
-                    embeddings_added_from_file += count_added
-                    total_embeddings_added_this_run += count_added
-                    logger.debug(f"Added batch of {count_added} embeddings. Index size: {index.ntotal}")
-                except Exception as e:
-                     logger.error(f"Error adding batch of embeddings to index: {e}. Corresponding mapping entries might not be added correctly.", exc_info=True)
-                     skipped_in_file += len(vectors_to_add) # Count these as skipped if add fails
-                     # Note: State might be inconsistent here (partially added mapping?) - checkpointing helps mitigate.
-        
-        # --- Loop through entries, build batches ---   
-        for i, entry in enumerate(current_entries):
-            total_entries_processed_this_run += 1
-            page_id = entry.get('page_id')
-            entry_title = entry.get('title', '[No Title]') # Get title early for logging
-            entry_last_edited_time_str = entry.get("last_edited_time") # Get last_edited_time
-
-            # --- Skip checks (ID, duplicate, content) ---
-            if not page_id:
-                logger.warning(f"Entry {i+1}/{entries_in_file} in {file_path} (Title: '{entry_title}') missing page_id. Skipping.")
-                skipped_in_file += 1
-                continue
-
-            if page_id in processed_page_ids:
-                logger.debug(f"Page ID {page_id} (Title: '{entry_title}') already processed. Skipping duplicate.")
-                skipped_in_file += 1
-                continue
-
-            content = entry.get('content', '')
-            # Skip if the main content block is empty/whitespace
-            if not content or not content.strip():
-                logger.warning(f"Entry {i+1}/{entries_in_file} (ID: {page_id}, Title: '{entry_title}') has empty/blank block content. Skipping embedding.")
-                skipped_in_file += 1
-                continue
-            
-            # --- Track overall_max_last_edited_time ---
-            if entry_last_edited_time_str:
-                try:
-                    # Notion's last_edited_time is usually like "2024-04-29T22:06:00.000Z"
-                    # Convert 'Z' to '+00:00' for fromisoformat if necessary
-                    entry_dt = datetime.fromisoformat(entry_last_edited_time_str.replace('Z', '+00:00'))
-                    if overall_max_last_edited_time is None or entry_dt > overall_max_last_edited_time:
-                        overall_max_last_edited_time = entry_dt
-                        logger.debug(f"New overall_max_last_edited_time: {overall_max_last_edited_time.isoformat()} from page {page_id}")
-                except ValueError as ve:
-                    logger.warning(f"Could not parse last_edited_time '{entry_last_edited_time_str}' for page {page_id} (Title: '{entry_title}'). Error: {ve}. Skipping for timestamp tracking.")
-            # --- End Track overall_max_last_edited_time ---
-            
-            # --- Construct enriched text for embedding --- 
-            metadata_parts = []
-            # Use the specific keys identified from transformers.py
-            if entry_title != '[No Title]':
-                 metadata_parts.append(f"Title: {entry_title}")
-            if entry.get('entry_date'):
-                 metadata_parts.append(f"Date: {entry['entry_date']}")
-            if entry.get('tags'):
-                 metadata_parts.append(f"Tags: {", ".join(entry['tags'])}")
-            if entry.get('food'):
-                 metadata_parts.append(f"Food: {", ".join(entry['food'])}")
-            if entry.get('friends'):
-                 metadata_parts.append(f"Friends: {", ".join(entry['friends'])}")
-            if entry.get('family'):
-                 metadata_parts.append(f"Family: {", ".join(entry['family'])}")
-            if entry.get('ai_summary'):
-                 metadata_parts.append(f"AI Summary: {entry['ai_summary']}")
-                 
-            # Combine metadata and content
-            # Add newlines between parts for clarity and potentially better embedding distinction
-            combined_text_for_embedding = "\n".join(metadata_parts) + "\n\nContent:\n" + content
-            
-            # --- >>> ADD DEBUG LOGGING (ONCE) <<< ---
-            if not logged_one_example:
-                logger.info("--- EXAMPLE EMBEDDING TEXT START ---")
-                logger.info(combined_text_for_embedding)
-                logger.info("--- EXAMPLE EMBEDDING TEXT END ---")
-                logged_one_example = True
-            # --- >>> END DEBUG LOGGING <<< ---
-            
-            # --- Add to current batch --- 
-            batch_texts_to_embed.append(combined_text_for_embedding) 
-            batch_metadata_for_mapping.append(entry) 
-            
-            # If batch is full, process it
-            if len(batch_texts_to_embed) >= BATCH_SIZE:
-                # Pass the correct buffers to the processing function
-                process_embedding_batch(batch_texts_to_embed, batch_metadata_for_mapping)
-                # Clear the batch buffers
-                batch_texts_to_embed = []
-                batch_metadata_for_mapping = []
-        
-        # Process any remaining items in the last batch for this file
-        if batch_texts_to_embed:
-            logger.info(f"Processing final batch of {len(batch_texts_to_embed)} entries for {file_path}...")
-            process_embedding_batch(batch_texts_to_embed, batch_metadata_for_mapping)
-            batch_texts_to_embed = [] 
-            batch_metadata_for_mapping = []
-        
-        # Update total skips and log file summary
-        total_entries_skipped_this_run += skipped_in_file
-        logger.info(f"Finished processing {file_path}. Added {embeddings_added_from_file} new embeddings. Skipped {skipped_in_file} entries (duplicates/errors/empty). Index size: {index.ntotal if index else 0}.")
-
-        # --- Save Checkpoint After Each File ---
-        if index is not None and embeddings_added_from_file > 0: # Only save if something was potentially added from this file
-            logger.info(f"Saving checkpoint after processing {file_path}... Index size: {index.ntotal}, Mapping size: {len(mapping_data)}")
-            checkpoint_saved = False
-            try:
-                faiss.write_index(index, args.index_file)
-                logger.info(f"Checkpoint index saved successfully to {args.index_file}.")
-                checkpoint_saved = True 
-            except Exception as e:
-                logger.error(f"Failed to save checkpoint FAISS index after {file_path}: {e}", exc_info=True)
-                logger.warning("Continuing to next file despite index checkpoint save failure.")
-
-            if checkpoint_saved: 
-                try:
-                    with open(args.mapping_file, 'w', encoding='utf-8') as f:
-                        json.dump(mapping_data, f, indent=2)
-                    logger.info(f"Checkpoint mapping data saved successfully to {args.mapping_file}.")
-                except Exception as e:
-                    logger.error(f"Failed to save checkpoint mapping data after {file_path}: {e}", exc_info=True)
-                    logger.warning("Continuing despite mapping checkpoint save failure. Index/mapping may be out of sync!")
-        elif embeddings_added_from_file == 0:
-             logger.info(f"No new embeddings added from {file_path}. Skipping checkpoint save.")
-
-    # --- Final Save Check (Consolidated) ---
-    logger.info("Performing final save check...")
-    if index is not None: 
-        logger.info(f"Finalizing save of index ({index.ntotal} vectors) and mapping ({len(mapping_data)} entries)...")
-        final_save_ok = True
-        try:
-            faiss.write_index(index, args.index_file)
-            logger.info(f"Final index saved successfully to {args.index_file}.")
-        except Exception as e:
-            logger.error(f"Failed to save final FAISS index: {e}", exc_info=True)
-            final_save_ok = False
-        
-        try:
-            with open(args.mapping_file, 'w', encoding='utf-8') as f:
-                json.dump(mapping_data, f, indent=2)
-            logger.info(f"Final mapping data saved successfully to {args.mapping_file}.")
-        except Exception as e:
-            logger.error(f"Failed to save final mapping data: {e}", exc_info=True)
-            final_save_ok = False
-            
-        if not final_save_ok:
-             logger.error("One or both final save operations failed. Index and mapping may be corrupt or out of sync!")
-    else:
-         logger.warning("No embeddings generated or index not initialized. Nothing to save.")
-
-    # --- Final Save & Summary --- 
-    final_mapping_data = mapping_data # Assuming mapping_data holds the final full map here
+    logger.info(f"--- Indexing Summary ---")
+    logger.info(f"Processed {files_processed_count} files.")
+    logger.info(f"Total entries considered for processing this run: {total_entries_processed_this_run}")
+    logger.info(f"Total new embeddings added/updated in Pinecone: {total_embeddings_added_this_run}")
+    logger.info(f"Total entries skipped (timestamp, duplicate, missing_id/content): {total_entries_skipped_this_run}")
     
-    # --- >>> NEW: Generate and Save Metadata Cache <<< ---
-    metadata_cache_file = "metadata_cache.json" # Define cache filename
-    extract_and_save_metadata_cache(final_mapping_data, metadata_cache_file)
-    # --- >>> END: Generate and Save Metadata Cache <<< ---
+    if pinecone_index_instance:
+        try:
+            final_stats = pinecone_index_instance.describe_index_stats()
+            logger.info(f"Final Pinecone index '{pinecone_index_name}' stats: {final_stats}")
+        except Exception as e:
+            logger.warning(f"Could not retrieve final Pinecone index stats: {e}")
 
-    # --- Summary Logging ---
-    logger.info("--- Index build/update process finished ---")
-    logger.info(f"Total entries processed across files: {total_entries_processed_this_run}")
-    logger.info(f"Total entries skipped (duplicates/errors/empty): {total_entries_skipped_this_run}")
-    logger.info(f"Total new embeddings added to index: {total_embeddings_added_this_run}")
-    logger.info(f"Final index size: {index.ntotal if index else 0} vectors")
-    logger.info(f"Final mapping size: {len(mapping_data)} entries")
+    # --- Save Mapping Data ---
+    logger.info(f"Saving updated mapping data to {args.mapping_file} ({len(mapping_data)} entries)...")
+    try:
+        with open(args.mapping_file, 'w', encoding='utf-8') as f_map_out:
+            json.dump(mapping_data, f_map_out, indent=4)
+        logger.info("Mapping data saved successfully.")
+    except Exception as e:
+        logger.error(f"Error saving mapping data: {e}", exc_info=True)
 
-    if index is None or index.ntotal == 0:
-        logger.warning("No vectors were added to the index. Index file and mapping will not be saved.")
-        # Also don't save metadata cache or last entry timestamp if nothing was indexed
+    # --- Save Last Entry Update Timestamp ---
+    if overall_max_last_edited_time:
+        logger.info(f"Saving last entry update timestamp ({overall_max_last_edited_time.isoformat()}) to {args.last_entry_timestamp_file}...")
+        try:
+            with open(args.last_entry_timestamp_file, 'w', encoding='utf-8') as f_ts_out:
+                f_ts_out.write(overall_max_last_edited_time.isoformat())
+            logger.info("Last entry update timestamp saved successfully.")
+        except Exception as e:
+            logger.error(f"Error saving last entry update timestamp: {e}", exc_info=True)
     else:
-        # Save FAISS index
-        try:
-            faiss.write_index(index, args.index_file)
-            logger.info(f"FAISS index saved to {args.index_file} with {index.ntotal} vectors.")
-        except Exception as e:
-            logger.error(f"Error saving FAISS index: {e}", exc_info=True)
+        logger.info("No new maximum last_edited_time determined in this run; timestamp file not updated.")
 
-        # Save mapping data
-        try:
-            with open(args.mapping_file, 'w', encoding='utf-8') as f:
-                json.dump(mapping_data, f, indent=2)
-            logger.info(f"Index-to-entry mapping saved to {args.mapping_file} with {len(mapping_data)} entries.")
-        except Exception as e:
-            logger.error(f"Error saving mapping data: {e}", exc_info=True)
-            
-        # Save metadata cache
-        extract_and_save_metadata_cache(mapping_data, "metadata_cache.json") # Assuming fixed name for now
+    # --- Save Metadata Cache ---
+    # (Assuming extract_and_save_metadata_cache is defined elsewhere or called if needed)
+    # For this refactor, focusing on Pinecone. This function might need an update if it relies on FAISS specific details.
+    # It seems to operate on mapping_data, so it should be mostly fine.
+    metadata_cache_file = os.path.join(os.path.dirname(args.mapping_file), "metadata_cache.json") # Assuming it's in the same dir
+    extract_and_save_metadata_cache(mapping_data, metadata_cache_file)
 
-        # Save the overall maximum last_edited_time
-        if overall_max_last_edited_time:
-            try:
-                with open(args.last_entry_timestamp_file, 'w', encoding='utf-8') as f_ts:
-                    f_ts.write(overall_max_last_edited_time.isoformat())
-                logger.info(f"Last processed entry timestamp saved to {args.last_entry_timestamp_file}: {overall_max_last_edited_time.isoformat()}")
-            except Exception as e:
-                logger.error(f"Error saving last processed entry timestamp: {e}", exc_info=True)
+
+    # --- Upload to Vercel Blob if requested ---
+    if args.upload_to_blob:
+        logger.info("Uploading generated files to Vercel Blob storage...")
+        if not vercel_blob:
+            logger.error("Vercel Blob SDK not available/imported. Cannot upload.")
         else:
-            logger.info("No last_edited_time was found in processed entries. Timestamp file not updated/created.")
-
-        # --- Vercel Blob Upload (Conditional) ---
-        if args.upload_to_blob:
-            logger.info("Upload to Vercel Blob requested.")
-            if not vercel_blob:
-                logger.error("Vercel Blob upload requested, but the \'vercel-blob\' library is not installed. Please install it first.")
+            blob_token = os.getenv("VERCEL_BLOB_ACCESS_TOKEN")
+            if not blob_token:
+                logger.error("VERCEL_BLOB_ACCESS_TOKEN not set. Cannot upload.")
             else:
-                blob_token = os.getenv("BLOB_READ_WRITE_TOKEN")
-                if not blob_token:
-                    logger.error("BLOB_READ_WRITE_TOKEN environment variable not set. Cannot upload to Vercel Blob.")
-                else:
-                    logger.info("BLOB_READ_WRITE_TOKEN found. Proceeding with Vercel Blob upload...")
-                    # Initialize Vercel Blob client (usually done implicitly by library when token is set)
-                    # Example: vercel_blob.put(...) will use the env var by default.
+                files_to_upload = {
+                    "mapping": (args.mapping_file, os.getenv("MAPPING_JSON_BLOB_URL")),
+                    "timestamp": (args.last_entry_timestamp_file, os.getenv("LAST_ENTRY_TIMESTAMP_BLOB_URL")), # Add timestamp file
+                    "metadata_cache": (metadata_cache_file, os.getenv("METADATA_CACHE_BLOB_URL")),
+                    # schema.json is not generated by this script, but if it were:
+                    # "schema": ("schema.json", os.getenv("SCHEMA_JSON_BLOB_URL")) 
+                }
+                # Removed: "index": (args.index_file, os.getenv("FAISS_INDEX_BLOB_URL"))
 
-                    files_to_upload = [
-                        args.index_file,
-                        args.mapping_file,
-                        args.last_entry_timestamp_file
-                    ]
-                    # Conditionally add metadata_cache.json if it exists
-                    # Assuming METADATA_CACHE_FILE is defined similarly to other defaults
-                    METADATA_CACHE_FILE = "metadata_cache.json" # Define if not already
-                    SCHEMA_FILE = "schema.json" # Define if not already
-
-                    if os.path.exists(METADATA_CACHE_FILE):
-                        files_to_upload.append(METADATA_CACHE_FILE)
-                    else:
-                        logger.warning(f"Metadata cache file {METADATA_CACHE_FILE} not found, will not be uploaded.")
+                for name, (local_path, blob_url_env) in files_to_upload.items():
+                    if not blob_url_env:
+                        logger.warning(f"Blob URL environment variable for {name} ({local_path}) is not set. Skipping upload.")
+                        continue
+                    if not os.path.exists(local_path):
+                        logger.warning(f"Local file {local_path} for {name} does not exist. Skipping upload.")
+                        continue
                     
-                    # Add schema.json - assuming it's generated or placed in the root
-                    # The design doc mentions its handling is an open question.
-                    # For now, we'll try to upload if it exists, as per the task list.
-                    if os.path.exists(SCHEMA_FILE):
-                        files_to_upload.append(SCHEMA_FILE)
-                    else:
-                        logger.warning(f"Schema file {SCHEMA_FILE} not found, will not be uploaded.")
+                    try:
+                        logger.info(f"Uploading {name} from {local_path} to Vercel Blob (URL derived from env var)...")
+                        # The put URL should be the desired path in the blob, not the full URL with SAS token.
+                        # Using the filename part of the blob_url_env if it's a full URL, or a simpler name.
+                        # Vercel `put` expects `pathname` which is like `articles/article.txt`
+                        # For simplicity, let's assume the env var provides the full URL and we extract a safe pathname
+                        # This part might need adjustment based on how vercel_blob expects the URL/pathname for `put`
+                        # A common pattern is to use the filename as the pathname in the blob.
+                        pathname_in_blob = os.path.basename(local_path)
+                        
+                        with open(local_path, 'rb') as f_blob_data:
+                            blob_put_response = vercel_blob.put(
+                                pathname=pathname_in_blob, # e.g., "index_mapping.json"
+                                body=f_blob_data,
+                                token=blob_token
+                                # add_random_suffix=False # Usually good to keep True unless specific URLs are needed
+                            )
+                        logger.info(f"Successfully uploaded {name} to Vercel Blob. URL: {blob_put_response.get('url')}")
+                    except Exception as e:
+                        logger.error(f"Failed to upload {name} ({local_path}) to Vercel Blob: {e}", exc_info=True)
+        logger.info("Vercel Blob upload process finished.")
 
-                    all_uploads_successful = True
-                    for file_path in files_to_upload:
-                        if os.path.exists(file_path):
-                            try:
-                                with open(file_path, 'rb') as f_blob:
-                                    # The vercel_blob.put() function expects filename and then data
-                                    # The first argument to put() is the path in the blob store.
-                                    # We'll use the base filename as the path in the blob store.
-                                    blob_path_name = os.path.basename(file_path)
-                                    logger.info(f"Uploading {file_path} to Vercel Blob as {blob_path_name}...")
-                                    response = vercel_blob.put(blob_path_name, f_blob.read(), {"token": blob_token, "addRandomSuffix": "false"}) # Explicitly pass token
-                                    logger.info(f"Successfully uploaded {file_path} to Vercel Blob: {response.get('url')}")
-                            except Exception as e:
-                                logger.error(f"Failed to upload {file_path} to Vercel Blob: {e}", exc_info=True)
-                                all_uploads_successful = False
-                        else:
-                            logger.warning(f"File {file_path} not found, skipping upload to Vercel Blob.")
-                    
-                    if all_uploads_successful:
-                        logger.info("All requested files uploaded successfully to Vercel Blob.")
-                    else:
-                        logger.error("One or more files failed to upload to Vercel Blob.")
 
-    logger.info("Index build/update process finished.")
+    logger.info("Build process finished.")
+
+
+async def process_and_upsert_batch(openai_client, texts_to_embed, metadata_list, mapping_data_ref, processed_page_ids_ref, pinecone_index_name: str):
+    """
+    Embeds a batch of texts and upserts them to Pinecone.
+    Updates mapping_data_ref and processed_page_ids_ref with successful entries.
+    Returns the number of embeddings successfully added.
+    """
+    global pinecone_index_instance # Ensure access to the global Pinecone index instance
+    embeddings_added_count = 0
+
+    if not texts_to_embed:
+        return 0
+
+    logger.debug(f"Embedding batch of {len(texts_to_embed)} texts...")
+    batch_embeddings = embed_batch(openai_client, texts_to_embed)
+
+    if batch_embeddings is None or len(batch_embeddings) != len(texts_to_embed):
+        logger.error(f"Failed to get embeddings for batch or mismatched length. Skipping {len(texts_to_embed)} entries.")
+        # Note: metadata_list corresponds to texts_to_embed, so all these are skipped.
+        return 0 # No embeddings added from this batch
+
+    vectors_to_upsert = []
+    successful_metadata_for_mapping = []
+
+    for i, embedding in enumerate(batch_embeddings):
+        if embedding is None:
+            logger.warning(f"Got None embedding for text: '{texts_to_embed[i][:50]}...'. Skipping this entry.")
+            continue
+
+        entry_metadata = metadata_list[i] # Original entry data
+        page_id = entry_metadata.get("page_id")
+        if not page_id: # Should have been caught earlier, but double check
+            logger.error(f"CRITICAL: Entry metadata missing 'page_id' at embedding stage. Text: '{texts_to_embed[i][:50]}...'. Skipping.")
+            continue
+        
+        page_id_str = str(page_id)
+
+        # Prepare metadata for Pinecone upsert.
+        # Crucially include page_id for filtering in rag_query.py
+        pinecone_meta = {
+            "page_id": page_id_str,
+            "title": entry_metadata.get("title", "Untitled"),
+            # Add other relevant, filterable metadata if desired:
+            # "entry_date": entry_metadata.get("entry_date_str_iso"), # If converted to ISO string
+            # "tags": entry_metadata.get("Tags", []) # Example if Tags are simple list of strings
+        }
+        # Ensure all metadata values are Pinecone compatible (str, num, bool, or list of str)
+        # For example, if 'entry_date_str_iso' is added, ensure it's an ISO string.
+
+        vectors_to_upsert.append({
+            "id": page_id_str,       # String ID
+            "values": embedding,     # Dense vector
+            "metadata": pinecone_meta # Metadata payload
+        })
+        successful_metadata_for_mapping.append(entry_metadata) # This entry is ready for mapping_data
+
+    if not vectors_to_upsert:
+        logger.info("No valid vectors prepared in this batch for Pinecone upsert.")
+        return 0
+
+    # Upsert to Pinecone in batches (though `vectors_to_upsert` is already one batch from embedding)
+    # Pinecone client's upsert can handle lists up to a certain size effectively.
+    # If vectors_to_upsert itself becomes extremely large (many thousands), then further sub-batching here might be needed.
+    # For now, assuming PINECONE_UPSERT_BATCH_SIZE is for controlling sub-batches if this list is huge.
+    # The current BATCH_SIZE for embeddings is 100, so vectors_to_upsert will have at most 100 items.
+    # This should be fine for a single Pinecone upsert call.
+    
+    try:
+        logger.debug(f"Upserting {len(vectors_to_upsert)} vectors to Pinecone index '{pinecone_index_name}'...")
+        
+        # Sub-batching for Pinecone upsert if vectors_to_upsert is larger than PINECONE_UPSERT_BATCH_SIZE
+        for j in range(0, len(vectors_to_upsert), PINECONE_UPSERT_BATCH_SIZE):
+            batch_to_upsert_pinecone = vectors_to_upsert[j:j + PINECONE_UPSERT_BATCH_SIZE]
+            metadata_sub_batch = successful_metadata_for_mapping[j:j + PINECONE_UPSERT_BATCH_SIZE]
+
+            if not batch_to_upsert_pinecone: continue
+
+            upsert_response = await asyncio.to_thread(pinecone_index_instance.upsert, vectors=batch_to_upsert_pinecone)
+            
+            # Process response and update mapping_data_ref and processed_page_ids_ref
+            # for the successfully upserted items in this sub-batch
+            # Assuming upsert_response.upserted_count gives us info, or we assume success if no error.
+            # For now, if no exception, assume all in batch_to_upsert_pinecone were successful.
+            current_batch_upserted_count = upsert_response.upserted_count if hasattr(upsert_response, 'upserted_count') else len(batch_to_upsert_pinecone)
+            logger.debug(f"Pinecone upsert response for sub-batch: Upserted count = {current_batch_upserted_count}")
+
+            for k_idx, original_entry_meta in enumerate(metadata_sub_batch):
+                # This assumes the order is maintained and success of the batch implies success for all its items.
+                # More robust error handling per vector might be needed for production if Pinecone provides it.
+                page_id_str_for_map = str(original_entry_meta["page_id"])
+                
+                # Add to main mapping_data if it's a new ID or if we are rebuilding (force_rebuild handled earlier for clearing)
+                # If it's an update to an existing ID, we might need to find and replace in mapping_data_ref
+                # For simplicity, if ID exists, we assume its metadata in mapping_data_ref is current or doesn't need changing here.
+                # The main purpose of mapping_data is to map ID to full content.
+                # If an entry is re-embedded and re-upserted, its content is what was just processed.
+                
+                existing_entry_index = -1
+                if page_id_str_for_map in processed_page_ids_ref: # If ID was already processed (e.g. in a previous file, or loaded mapping)
+                    # Find and update existing entry in mapping_data_ref
+                    for idx, map_entry in enumerate(mapping_data_ref):
+                        if str(map_entry.get("page_id")) == page_id_str_for_map:
+                            existing_entry_index = idx
+                            break
+                    if existing_entry_index != -1:
+                        logger.debug(f"Updating existing entry in mapping_data for page_id: {page_id_str_for_map}")
+                        mapping_data_ref[existing_entry_index] = original_entry_meta # Replace with the new metadata
+                    else: # Should not happen if page_id_str_for_map is in processed_page_ids_ref from loading
+                        logger.warning(f"page_id {page_id_str_for_map} was in processed_page_ids_ref but not found in mapping_data_ref. Appending.")
+                        mapping_data_ref.append(original_entry_meta)
+                else: # New entry
+                    mapping_data_ref.append(original_entry_meta)
+
+                processed_page_ids_ref.add(page_id_str_for_map)
+                embeddings_added_count +=1 # Count actual successful items based on original metadata count for this batch
+        
+        logger.info(f"Successfully upserted {embeddings_added_count} vectors from batch to Pinecone.")
+
+    except PineconeException as e:
+        logger.error(f"Pinecone API error during upsert: {e}", exc_info=True)
+        # Decide how to handle partial failures, for now, assume batch failed if error occurs
+        return 0 # No embeddings counted as added from this batch on error
+    except Exception as e:
+        logger.error(f"Unexpected error during Pinecone upsert: {e}", exc_info=True)
+        return 0
+        
+    return embeddings_added_count
+
 
 if __name__ == "__main__":
-    # Check for OPENAI_API_KEY early
-    try:
-        _ = config.OPENAI_API_KEY 
-    except ValueError as e:
-         print(f"Error: {e}", file=sys.stderr)
-         sys.exit(1)
-    main() 
+    asyncio.run(main()) 

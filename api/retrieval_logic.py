@@ -11,6 +11,7 @@ import numpy as np
 import faiss # Will be needed for search logic later
 import json
 from datetime import date, timedelta
+from typing import Optional
 
 # Imports for get_embedding - to be reviewed if they are all needed here
 # or if some (like RateLimitError, APIError) are handled by a shared OpenAI client wrapper later.
@@ -96,6 +97,66 @@ async def get_embedding(text: str, embedding_model_key: str, **kwargs) -> dict:
     if not embedding_response["error"]:
         embedding_response["error"] = f"Failed to get embedding for model {selected_embedding_config['api_id']} after all retries."
     return embedding_response
+
+async def perform_pinecone_search(query_embedding: list[float],
+                                  top_k: int,
+                                  filter_payload: Optional[dict] = None # For Pinecone metadata filters
+                                 ) -> tuple[list[str], dict[str, float]]:
+    """Performs a semantic search using Pinecone.
+
+    Args:
+        query_embedding: The query embedding vector (list of floats).
+        top_k: The number of top results to retrieve.
+        filter_payload: Optional dictionary for Pinecone metadata filtering.
+                         Example: {"genre": "drama", "year": {"$gte": 2020}}
+                         Or for specific IDs: {"vector_id_field_name": {"$in": ["id1", "id2"]}}
+                         (The exact field name for ID filtering depends on how metadata is indexed in Pinecone)
+
+    Returns:
+        A tuple containing:
+            - A list of retrieved document string IDs.
+            - A dictionary mapping document string IDs to their similarity scores.
+        Returns empty list and dict if search fails or no results.
+    """
+    if not rag_initializer.pinecone_index_instance:
+        logger.error("Pinecone index instance not initialized. Cannot perform search.")
+        return [], {}
+    
+    if top_k == 0:
+        logger.info("Top_k for Pinecone search is 0, returning empty results.")
+        return [], {}
+
+    logger.info(f"Performing Pinecone search for top_k={top_k} results...")
+    if filter_payload:
+        logger.info(f"Using filter payload: {json.dumps(filter_payload)}")
+
+    try:
+        query_response = await asyncio.to_thread(
+            rag_initializer.pinecone_index_instance.query,
+            vector=query_embedding,
+            top_k=top_k,
+            filter=filter_payload, # Pass the filter payload here
+            include_values=False,  # We typically don't need the vector values back
+            include_metadata=False # For MVP, we fetch metadata from index_mapping.json later
+                                  # If metadata were stored in Pinecone and needed, set to True
+        )
+        
+        retrieved_ids: list[str] = []
+        scores: dict[str, float] = {}
+
+        if query_response and query_response.matches:
+            for match in query_response.matches:
+                retrieved_ids.append(match.id)
+                scores[match.id] = match.score
+            logger.info(f"Pinecone search completed. Retrieved {len(retrieved_ids)} IDs.")
+        else:
+            logger.info("Pinecone search returned no matches or an empty response.")
+            
+        return retrieved_ids, scores
+
+    except Exception as e:
+        logger.error(f"Pinecone search failed: {e}", exc_info=True)
+        return [], {}
 
 # FAISS search logic will be added here later
 async def perform_faiss_search(query_embedding_np: np.ndarray,

@@ -5,6 +5,7 @@ import os
 import logging
 from datetime import date, datetime, timezone
 from pathlib import Path
+from typing import Optional, Any
 
 # Added for Vercel Blob integration
 try:
@@ -17,18 +18,11 @@ except ImportError:
 
 from openai import OpenAI
 from anthropic import Anthropic
+from pinecone import Pinecone
 from langchain_community.vectorstores import FAISS
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.text_splitters import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import JSONLoader
-
-# Import configuration constants
-from .rag_config import (
-    INDEX_PATH_LOCAL, 
-    DOCSTORE_PATH_LOCAL,
-    TIMESTAMP_FILE_LOCAL,
-    RAG_CONFIG
-)
 
 logger = logging.getLogger("api.rag_initializer")
 
@@ -44,6 +38,8 @@ SCHEMA_FILENAME = "schema.json"
 # These will be imported and used by the main RAG logic (rag_query.py)
 openai_client: Optional[OpenAI] = None
 anthropic_client: Optional[Anthropic] = None
+pinecone_client: Optional[Pinecone] = None
+pinecone_index_instance: Optional[Any] = None
 index = None
 mapping_data_list: list[dict] | None = None
 index_to_entry: dict[int, dict] | None = None
@@ -58,9 +54,9 @@ _rag_data_loaded = False
 # Ensure RAG_CONFIG["today_date"] is set before this module is fully imported if used at module level
 # Or, move these inside functions if RAG_CONFIG["today_date"] is determined dynamically elsewhere
 
-INDEX_BLOB_NAME = RAG_CONFIG["FAISS_INDEX_FILENAME"]
-DOCSTORE_BLOB_NAME = RAG_CONFIG["DOCSTORE_FILENAME"]
-TIMESTAMP_BLOB_NAME = RAG_CONFIG["LAST_ENTRY_UPDATE_TIMESTAMP_FILENAME"]
+# INDEX_BLOB_NAME = RAG_CONFIG["FAISS_INDEX_FILENAME"]
+# DOCSTORE_BLOB_NAME = RAG_CONFIG["DOCSTORE_FILENAME"]
+# TIMESTAMP_BLOB_NAME = RAG_CONFIG["LAST_ENTRY_UPDATE_TIMESTAMP_FILENAME"]
 
 # --- Custom Exceptions ---
 class RAGSystemNotInitializedError(Exception):
@@ -78,14 +74,20 @@ def load_rag_data():
         logger.debug("RAG data already loaded. Skipping reload.")
         return
 
-    logger.info("--- Starting RAG Data Loading --- ")
+    # Ensure Pinecone client is initialized before loading data that might depend on it
+    # (though for now, load_rag_data mainly loads mapping files, not directly using the index object)
+    if not pinecone_index_instance: # Check if Pinecone is ready
+        logger.warning("Pinecone client/index not initialized. Data loading might be incomplete if it were to rely on an active index connection immediately.")
+        # Depending on strictness, could raise an error here or try to proceed with just file loading.
+        # For now, we primarily load mapping files, schema, etc.
+
+    logger.info("--- Starting RAG Data Loading (Mapping, Schema, Metadata Cache) --- ")
 
     data_source_mode = os.getenv('DATA_SOURCE_MODE', 'local').lower()
     logger.info(f"DATA_SOURCE_MODE set to: {data_source_mode}")
 
     # --- Determine base path for data files ---
     # These will be the actual paths used for loading, whether local or remote (temp)
-    current_index_path: Path
     current_mapping_path: Path
     current_metadata_path: Path
     current_schema_path: Path
@@ -111,7 +113,7 @@ def load_rag_data():
         # Define expected environment variables for blob URLs
         # These URLs point to the specific files in Vercel Blob storage
         file_env_vars_and_paths = {
-            INDEX_FILENAME: (os.getenv("FAISS_INDEX_BLOB_URL"), remote_tmp_dir / INDEX_FILENAME),
+            # INDEX_FILENAME: (os.getenv("FAISS_INDEX_BLOB_URL"), remote_tmp_dir / INDEX_FILENAME), # FAISS Index removed
             MAPPING_FILENAME: (os.getenv("MAPPING_JSON_BLOB_URL"), remote_tmp_dir / MAPPING_FILENAME),
             METADATA_FILENAME: (os.getenv("METADATA_CACHE_BLOB_URL"), remote_tmp_dir / METADATA_FILENAME),
             SCHEMA_FILENAME: (os.getenv("SCHEMA_JSON_BLOB_URL"), remote_tmp_dir / SCHEMA_FILENAME),
@@ -121,7 +123,8 @@ def load_rag_data():
             if not url:
                 # For schema.json and metadata_cache.json, it might be optional if they don't exist.
                 # However, index and mapping are critical.
-                if filename in [INDEX_FILENAME, MAPPING_FILENAME]:
+                # if filename in [INDEX_FILENAME, MAPPING_FILENAME]: # INDEX_FILENAME removed from critical check
+                if filename == MAPPING_FILENAME: # Only MAPPING_FILENAME is critical now from this list
                     logger.error(f"Fatal: Blob URL for critical file '{filename}' is not set in environment variables.")
                     raise RuntimeError(f"Missing Blob URL for {filename}.")
                 else:
@@ -138,25 +141,28 @@ def load_rag_data():
             except VercelBlobException as e:
                 logger.error(f"Fatal: Failed to download '{filename}' from Vercel Blob (URL: {url}): {e}", exc_info=True)
                 # If critical files fail, re-raise. For optional, we might allow proceeding.
-                if filename in [INDEX_FILENAME, MAPPING_FILENAME]:
+                # if filename in [INDEX_FILENAME, MAPPING_FILENAME]: # INDEX_FILENAME removed
+                if filename == MAPPING_FILENAME:
                     raise RuntimeError(f"Failed to download critical file {filename} from Vercel Blob.") from e
                 logger.warning(f"Could not download optional file {filename}. Will proceed without it.")
             except Exception as e: # Catch any other unexpected errors during download
                 logger.error(f"Fatal: An unexpected error occurred downloading '{filename}' from Vercel Blob: {e}", exc_info=True)
-                if filename in [INDEX_FILENAME, MAPPING_FILENAME]:
+                # if filename in [INDEX_FILENAME, MAPPING_FILENAME]: # INDEX_FILENAME removed
+                if filename == MAPPING_FILENAME:
                     raise RuntimeError(f"Unexpected error downloading critical file {filename} from Vercel Blob.") from e
                 logger.warning(f"Unexpected error downloading optional file {filename}. Will proceed without it.")
             
             # Assign current paths after successful download or if optional and URL missing
-            if filename == INDEX_FILENAME: current_index_path = local_tmp_path
-            elif filename == MAPPING_FILENAME: current_mapping_path = local_tmp_path
+            # if filename == INDEX_FILENAME: current_index_path = local_tmp_path # FAISS Index removed
+            if filename == MAPPING_FILENAME: current_mapping_path = local_tmp_path
             elif filename == METADATA_FILENAME: current_metadata_path = local_tmp_path
             elif filename == SCHEMA_FILENAME: current_schema_path = local_tmp_path
         
         # Check if critical paths were set (they would be if download succeeded or if URL was missing but error was raised)
-        if not 'current_index_path' in locals() or not 'current_mapping_path' in locals():
+        # if not 'current_index_path' in locals() or not 'current_mapping_path' in locals(): # current_index_path check removed
+        if not 'current_mapping_path' in locals():
              # This case should ideally be caught by earlier errors, but as a safeguard:
-            logger.error("Fatal: Critical data paths (index or mapping) were not established in remote mode.")
+            logger.error("Fatal: Critical data paths (mapping) were not established in remote mode.")
             raise RuntimeError("Critical remote data paths not established.")
         if not 'current_metadata_path' in locals(): # Ensure it's defined even if download failed/skipped for optional
             current_metadata_path = remote_tmp_dir / METADATA_FILENAME
@@ -171,22 +177,28 @@ def load_rag_data():
         local_data_base_dir = Path(os.getenv('LOCAL_DATA_PATH', '.'))
         logger.info(f"Local data path set to: {local_data_base_dir.resolve()}")
 
-        current_index_path = local_data_base_dir / DEFAULT_INDEX_FILENAME
-        current_mapping_path = local_data_base_dir / DEFAULT_MAPPING_FILENAME
-        current_metadata_path = local_data_base_dir / DEFAULT_METADATA_FILENAME
-        current_schema_path = local_data_base_dir / DEFAULT_SCHEMA_FILENAME
+        # current_index_path = local_data_base_dir / DEFAULT_INDEX_FILENAME # FAISS Index removed
+        current_mapping_path = local_data_base_dir / MAPPING_FILENAME
+        current_metadata_path = local_data_base_dir / METADATA_FILENAME
+        current_schema_path = local_data_base_dir / SCHEMA_FILENAME
     else:
         logger.error(f"Fatal: Invalid DATA_SOURCE_MODE: '{data_source_mode}'. Must be 'local' or 'remote'.")
         raise ValueError(f"Invalid DATA_SOURCE_MODE: {data_source_mode}")
 
     # --- Load data using the determined paths ---
-    try:
-        logger.info(f"Loading FAISS index from {current_index_path}...")
-        index = faiss.read_index(str(current_index_path)) # faiss expects string path
-        logger.info(f"Index loaded successfully. Total vectors: {index.ntotal}")
-    except Exception as e:
-        logger.error(f"Fatal: Failed to load FAISS index from {current_index_path}: {e}", exc_info=True)
-        raise RuntimeError(f"Could not load FAISS index from {current_index_path}") from e
+    # FAISS Index loading is removed. The 'index' global will be the pinecone_index_instance.
+    # try:
+    #     logger.info(f"Loading FAISS index from {current_index_path}...")
+    #     index = faiss.read_index(str(current_index_path)) # faiss expects string path
+    #     logger.info(f"Index loaded successfully. Total vectors: {index.ntotal}")
+    # except Exception as e:
+    #     logger.error(f"Fatal: Failed to load FAISS index from {current_index_path}: {e}", exc_info=True)
+    #     raise RuntimeError(f"Could not load FAISS index from {current_index_path}") from e
+
+    global index # This now refers to the pinecone_index_instance
+    if not pinecone_index_instance and not index: # Check if pinecone index is available
+        logger.warning("Pinecone index instance is not available. RAG system might not function correctly for retrieval.")
+        # Depending on use case, might want to raise error or allow proceeding if only mapping is needed for some ops
 
     try:
         logger.info(f"Loading index mapping list from {current_mapping_path}...")
@@ -197,28 +209,59 @@ def load_rag_data():
         mapping_data_list = loaded_mapping_data 
         logger.info(f"Mapping list loaded successfully. Total entries: {len(mapping_data_list)}")
 
-        if index and len(mapping_data_list) != index.ntotal:
-            logger.warning(f"Mismatch: FAISS index has {index.ntotal} vectors, but mapping list has {len(mapping_data_list)} entries. Assuming list order corresponds to index order, but this could cause issues.")
+        # The check against index.ntotal needs to be re-evaluated for Pinecone.
+        # For now, we'll skip the direct comparison with Pinecone's total vectors here.
+        # If pinecone_index_instance:
+        #     try:
+        #         stats = pinecone_index_instance.describe_index_stats()
+        #         pinecone_total_vectors = stats.total_vector_count
+        #         if len(mapping_data_list) != pinecone_total_vectors:
+        #             logger.warning(f"Mismatch: Pinecone index has {pinecone_total_vectors} vectors, "
+        #                            f"but mapping list has {len(mapping_data_list)} entries. "
+        #                            "This could indicate an inconsistency.")
+        #     except Exception as e:
+        #         logger.warning(f"Could not get Pinecone index stats to verify mapping length: {e}")
+
 
         temp_index_to_entry = {} 
-        for i, entry in enumerate(mapping_data_list):
-            if not isinstance(entry, dict):
-                logger.warning(f"Skipping non-dictionary item at index {i} in mapping list: {entry}")
+        for i, entry_data in enumerate(mapping_data_list): # Changed 'entry' to 'entry_data' to avoid conflict if 'entry' is a pinecone object
+            if not isinstance(entry_data, dict):
+                logger.warning(f"Skipping non-dictionary item at index {i} in mapping list: {entry_data}")
                 continue
             
-            entry['faiss_index'] = i 
+            # IMPORTANT: Pinecone uses string IDs.
+            # We assume 'index_mapping.json' now contains entries where each dict
+            # has a unique string ID (e.g., 'page_id' or 'vector_id') that was used for Pinecone.
+            # This ID should be used to key 'index_to_entry'.
+            # For MVP, let's assume 'page_id' is the string ID.
+            # build_index.py will need to ensure this 'page_id' is used for upserting to Pinecone.
+
+            vector_id = entry_data.get('page_id') # Assuming 'page_id' is the string ID. Make this configurable if needed.
+                                                # Or, look for a dedicated 'vector_id' field if build_index.py adds one.
+
+            if not vector_id:
+                logger.warning(f"Entry at index {i} in mapping list is missing 'page_id' (expected as string vector ID). Skipping: {entry_data.get('title', 'N/A')}")
+                continue
             
-            if 'entry_date' in entry and isinstance(entry['entry_date'], str):
+            if not isinstance(vector_id, str):
+                # Attempt to stringify, but log a warning as this implies an issue with how index_mapping.json was created.
+                logger.warning(f"Vector ID ('page_id': {vector_id}) for entry '{entry_data.get('title', 'N/A')}' is not a string. Attempting to cast. This should be fixed in build_index.py.")
+                vector_id = str(vector_id)
+
+            # entry_data['faiss_index'] = i # This is no longer relevant
+            entry_data['vector_id'] = vector_id # Store the string ID used for Pinecone
+
+            if 'entry_date' in entry_data and isinstance(entry_data['entry_date'], str):
                 try:
-                    entry['entry_date'] = date.fromisoformat(entry['entry_date'])
+                    entry_data['entry_date'] = date.fromisoformat(entry_data['entry_date'])
                 except ValueError:
-                    page_id_for_log = entry.get('page_id', f'index {i}')
-                    logger.warning(f"Could not parse date string: {entry['entry_date']} for entry {page_id_for_log}")
-                    entry['entry_date'] = None
+                    page_id_for_log = entry_data.get('page_id', f'index {i}')
+                    logger.warning(f"Could not parse date string: {entry_data['entry_date']} for entry {page_id_for_log}")
+                    entry_data['entry_date'] = None
             
-            temp_index_to_entry[i] = entry
+            temp_index_to_entry[vector_id] = entry_data # Use string vector_id as key
         index_to_entry = temp_index_to_entry 
-        logger.info(f"Processed mapping list into index_to_entry lookup. Size: {len(index_to_entry)}")
+        logger.info(f"Processed mapping list into index_to_entry lookup. Size: {len(index_to_entry)} (keyed by string vector IDs)")
             
     except FileNotFoundError:
         logger.error(f"Fatal: Mapping file not found at {current_mapping_path}")
@@ -275,6 +318,52 @@ def load_rag_data():
     
     _rag_data_loaded = True 
     logger.info("--- RAG Data Loading Complete --- ")
+
+def initialize_pinecone_client(pinecone_api_key: str | None, pinecone_index_name: str | None):
+    """Initializes the Pinecone client and connects to the specified index."""
+    global pinecone_client, pinecone_index_instance, index
+    logger.info("Initializing Pinecone client...")
+
+    # Use passed arguments instead of os.getenv()
+    # pinecone_api_key = os.getenv("PINECONE_API_KEY")
+    # pinecone_index_name = os.getenv("PINECONE_INDEX_NAME")
+
+    if not pinecone_api_key:
+        logger.error("PINECONE_API_KEY not provided to initialize_pinecone_client. Pinecone client not initialized.")
+        return
+    if not pinecone_index_name:
+        logger.error("PINECONE_INDEX_NAME not provided to initialize_pinecone_client. Pinecone client not initialized.")
+        return
+    # Environment variable for Pinecone host/environment might be needed if direct init by name fails
+    # For pinecone-client v3.x, initialization with api_key is standard.
+    # The host is resolved when pc.Index(name) is called.
+
+    try:
+        logger.info(f"Attempting to initialize Pinecone client with API key.")
+        pc = Pinecone(api_key=pinecone_api_key)
+        logger.info(f"Pinecone client initialized. Connecting to index: '{pinecone_index_name}'")
+        
+        # Check if index exists and is ready (optional, good practice)
+        # if pinecone_index_name not in pc.list_indexes().names:
+        #     logger.error(f"Pinecone index '{pinecone_index_name}' does not exist.")
+        #     # Decide if to raise error or try to create it, for now, assume it exists.
+        #     return
+
+        index_instance = pc.Index(pinecone_index_name)
+        # You can add a describe_index_stats() call here to confirm connection and get details
+        # stats = index_instance.describe_index_stats()
+        # logger.info(f"Successfully connected to Pinecone index '{pinecone_index_name}'. Stats: {stats}")
+        
+        pinecone_client = pc
+        pinecone_index_instance = index_instance
+        index = pinecone_index_instance # Assign to global index variable
+        logger.info(f"Pinecone client and index '{pinecone_index_name}' instance are ready.")
+
+    except Exception as e:
+        logger.error(f"Failed to initialize Pinecone client or connect to index '{pinecone_index_name}': {e}", exc_info=True)
+        pinecone_client = None
+        pinecone_index_instance = None
+        index = None # Ensure index is also None on failure
 
 def initialize_openai_client(api_key: str | None):
     """Initializes the OpenAI client using the provided API key."""
@@ -349,6 +438,8 @@ def get_rag_globals() -> dict:
     return {
         "openai_client": openai_client,
         "anthropic_client": anthropic_client,
+        "pinecone_client": pinecone_client,
+        "pinecone_index_instance": pinecone_index_instance,
         "index": index,
         "mapping_data_list": mapping_data_list,
         "index_to_entry": index_to_entry,

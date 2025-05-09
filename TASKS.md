@@ -259,6 +259,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
       - [x] If `fallback_triggered_due_to_tags` is true, modify the `final_system_prompt`.
       - [x] Inform the LLM that initial filtering for specific tags didn't yield exhaustive results, so the search was broadened. Instruct it to carefully look for concepts related to the original query (including the initially requested tags if they were part of the user's natural language query) within the provided content.
       - [x] Example: "The initial search for entries explicitly tagged with 'X' did not return results. The search was broadened. Please review for information related to the query, paying attention to mentions of 'X' within the content."
+      - [x] Implemented two-stage logic (metadata count first, then exemplars) for quantitative person and tag queries.
     - [x] **Testing:** Test with queries where relevant entries exist but lack explicit tags, and also where entries have the tags.
   - [ ] **Chunking Strategy:** Investigate alternatives to embedding entire entries. Explore fixed-size, sentence-based, or content-aware chunking to potentially improve retrieval specificity and reduce context size.
   - [ ] **Retrieval Tuning:**
@@ -269,7 +270,6 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [ ] Further refine system/user prompts for query analysis and final answer generation.
     - [ ] Experiment with different prompt structures (e.g., few-shot examples).
     - [ ] Improve handling of the "tagged = seen" assumption (e.g., injecting text notes into context, or implementing two-stage logic for counting vs. content queries).
-      - [x] Implemented two-stage logic (metadata count first, then exemplars) for quantitative person and tag queries.
   - [ ] **Query Processing:**
     - [ ] Implement query decomposition for complex questions involving multiple parts or constraints.
     - [ ] Enhance query safety check (e.g., more nuanced topic detection, stricter default behavior on error).
@@ -427,6 +427,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 As the project grows, detailed task lists for major features or initiatives will be maintained in separate files within the `tasks/` directory to keep this main `TASKS.md` file concise and focused on overall progress and smaller, more general tasks.
 
 *   **Vercel Deployment:** See [`tasks/VERCEL_DEPLOYMENT_TASKS.md`](tasks/VERCEL_DEPLOYMENT_TASKS.md) for the detailed plan and tasks related to deploying the application to Vercel.
+*   **Pinecone Integration:** See [`tasks/PINECONE_INTEGRATION_TASKS.md`](tasks/PINECONE_INTEGRATION_TASKS.md) for tasks related to migrating from FAISS to Pinecone.
 
 ## Refactor cli.py for Enhanced Modularity and Maintainability
 

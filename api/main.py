@@ -18,6 +18,7 @@ from .rag_initializer import (
     load_rag_data, 
     initialize_openai_client, 
     initialize_anthropic_client,
+    initialize_pinecone_client,
     get_openai_client,
     get_anthropic_client,
     get_retriever,
@@ -36,6 +37,8 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),
 # Call this early, potentially wrap in startup event
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY") # Load Pinecone API Key
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME") # Load Pinecone Index Name
 
 # CORRECTED LOGGING:
 openai_key_snippet = f"'{OPENAI_API_KEY[:5]}...'" if OPENAI_API_KEY else "None"
@@ -50,6 +53,8 @@ try:
     initialize_openai_client(OPENAI_API_KEY)
     logger.info("Initializing Anthropic client...")
     initialize_anthropic_client(ANTHROPIC_API_KEY)
+    logger.info("Initializing Pinecone client...")
+    initialize_pinecone_client(PINECONE_API_KEY, PINECONE_INDEX_NAME) # Pass loaded keys
     logger.info("RAG system and LLM clients initialized successfully.")
 except Exception as e:
     logger.critical(f"Failed to initialize RAG system or LLM clients on startup: {e}", exc_info=True)
@@ -90,6 +95,7 @@ class SourceDocument(BaseModel):
     url: str
     id: Optional[str] = None
     date: Optional[str] = None
+    score: Optional[float] = None
 
 class QueryResponse(BaseModel):
     answer: str
