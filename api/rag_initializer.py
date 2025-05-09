@@ -1,5 +1,5 @@
 """Manages shared RAG state (data, clients)."""
-import faiss
+# import faiss # Removed this line
 import json
 import os
 import logging
