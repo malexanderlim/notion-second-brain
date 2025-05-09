@@ -2,5 +2,7 @@
   "name": "notion-second-brain-monorepo",
   "private": true,
   "version": "1.0.0",
-  "scripts": {}
+  "scripts": {
+    "vercel-build": "cd frontend && npm install && npm run build && cd .. && rm -rf dist && mv frontend/dist dist"
+  }
 } 
