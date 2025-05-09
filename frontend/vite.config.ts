@@ -11,9 +11,16 @@ export default defineConfig({
   ],
   resolve: {
     alias: [
-      // Define the @ alias to point to the src directory directly
-      // path.resolve(__dirname, './src') ensures it's an absolute path
-      { find: '@', replacement: path.resolve(__dirname, './src') },
+      // Hyper-specific alias for the problematic import
+      { 
+        find: '@/lib/utils', 
+        replacement: path.resolve(__dirname, './src/lib/utils.ts') 
+      },
+      // Keep the general @ alias as a fallback for other imports, but ensure it's processed after the specific one
+      { 
+        find: '@', 
+        replacement: path.resolve(__dirname, './src') 
+      },
     ],
   },
 })
