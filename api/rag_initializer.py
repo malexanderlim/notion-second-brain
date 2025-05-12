@@ -3,18 +3,19 @@
 import json
 import os
 import logging
+import requests # Added
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Optional, Any
 
-# Added for Vercel Blob integration
-try:
-    from vercel_blob import download as vercel_download, put as vercel_put, list as vercel_list, VercelBlobException
-except ImportError:
-    vercel_download = None
-    vercel_put = None
-    vercel_list = None
-    VercelBlobException = None
+# Removed Vercel Blob SDK import block
+# try:
+#     from vercel_blob import download as vercel_download, put as vercel_put, list as vercel_list, VercelBlobException
+# except ImportError:
+#     vercel_download = None
+#     vercel_put = None
+#     vercel_list = None
+#     VercelBlobException = None
 
 from openai import OpenAI
 from anthropic import Anthropic
@@ -65,6 +66,42 @@ class RAGSystemNotInitializedError(Exception):
 class LLMClientNotInitializedError(Exception):
     pass
 
+# --- Helper function for Vercel Blob Download ---
+def download_file_from_vercel_blob(blob_url: str, local_path: Path, token: str | None = None):
+    logger.info(f"Attempting to download from Vercel Blob URL: {blob_url[:60]}... to {local_path}")
+    headers = {}
+    # The VERCEL_BLOB_ACCESS_TOKEN might be needed if the blob URLs are not public
+    # or if they are SAS URLs that require this specific token for this operation.
+    # Vercel docs say URLs are public but unguessable. For direct GET, token might not be needed.
+    # We will try without first, and add if necessary based on errors.
+    # However, if the `token` argument is explicitly provided (e.g., from VERCEL_BLOB_ACCESS_TOKEN),
+    # we should use it, as some blob operations might require it even for GET if they go via an API gateway first.
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+        logger.debug(f"Using Authorization header for download from {blob_url[:60]}...")
+
+    try:
+        response = requests.get(blob_url, headers=headers, stream=True, timeout=60) # 60s timeout
+        response.raise_for_status() # Raises an HTTPError for bad responses (4XX or 5XX)
+        
+        # Ensure parent directory for local_path exists
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with open(local_path, "wb") as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+        logger.info(f"Successfully downloaded from {blob_url} to {local_path}")
+        return True
+    except requests.exceptions.HTTPError as e_http:
+        logger.error(f"HTTP error downloading from Vercel Blob URL {blob_url}: {e_http}")
+        if e_http.response is not None:
+            logger.error(f"Response status: {e_http.response.status_code}, Response text: {e_http.response.text}")
+        return False
+    except requests.exceptions.RequestException as e_req:
+        logger.error(f"RequestException (e.g., connection error, timeout) downloading from {blob_url}: {e_req}")
+        return False
+# --- End Helper function ---
+
 def load_rag_data():
     """Loads necessary data for RAG: index, mapping (list), metadata cache, schema.
        Uses a flag to prevent reloading if already loaded.
@@ -96,9 +133,8 @@ def load_rag_data():
     current_schema_path: Path
 
     if data_source_mode == 'remote':
-        if not vercel_download or not VercelBlobException:
-            logger.error("Fatal: Vercel Blob SDK (vercel-blob) is not installed, but DATA_SOURCE_MODE is 'remote'.")
-            raise RuntimeError("Vercel Blob SDK not installed for remote data loading.")
+        # Check for requests, though it should be standard
+        # No specific SDK check needed now beyond Python's capabilities
 
         remote_tmp_dir = Path("/tmp/rag_data")
         try:
@@ -108,13 +144,14 @@ def load_rag_data():
             logger.error(f"Fatal: Could not create temporary directory {remote_tmp_dir}: {e}", exc_info=True)
             raise RuntimeError(f"Failed to create temporary directory {remote_tmp_dir}") from e
 
-        blob_token = os.getenv("VERCEL_BLOB_ACCESS_TOKEN")
-        if not blob_token:
-            logger.error("Fatal: VERCEL_BLOB_ACCESS_TOKEN not set for remote data loading.")
-            raise RuntimeError("VERCEL_BLOB_ACCESS_TOKEN not set.")
+        # VERCEL_BLOB_ACCESS_TOKEN might be needed by download_file_from_vercel_blob if URLs are not fully public
+        # or require auth even for GETs. For now, the helper function can try without if token=None.
+        # However, it's good practice to fetch it here if we anticipate needing it.
+        blob_token_for_download = os.getenv("VERCEL_BLOB_ACCESS_TOKEN") 
+        if not blob_token_for_download:
+             logger.warning("VERCEL_BLOB_ACCESS_TOKEN not set. Downloads will be attempted without Authorization header.")
+             # This might be fine if blob URLs are fully public.
 
-        # Define expected environment variables for blob URLs
-        # These URLs point to the specific files in Vercel Blob storage
         file_env_vars_and_paths = {
             # INDEX_FILENAME: (os.getenv("FAISS_INDEX_BLOB_URL"), remote_tmp_dir / INDEX_FILENAME), # FAISS Index removed
             MAPPING_FILENAME: (os.getenv("MAPPING_JSON_BLOB_URL"), remote_tmp_dir / MAPPING_FILENAME),
@@ -122,7 +159,9 @@ def load_rag_data():
             SCHEMA_FILENAME: (os.getenv("SCHEMA_JSON_BLOB_URL"), remote_tmp_dir / SCHEMA_FILENAME),
         }
 
+        all_downloads_successful = True
         for filename, (url, local_tmp_path) in file_env_vars_and_paths.items():
+            is_critical = (filename == MAPPING_FILENAME)
             if not url:
                 # For schema.json and metadata_cache.json, it might be optional if they don't exist.
                 # However, index and mapping are critical.
@@ -137,23 +176,22 @@ def load_rag_data():
                     if filename == SCHEMA_FILENAME: current_schema_path = local_tmp_path
                     continue # Skip download if URL is not set for optional files
 
-            logger.info(f"Downloading '{filename}' from Vercel Blob (URL: {url[:30]}...) to '{local_tmp_path}'...")
-            try:
-                vercel_download(url=url, path=local_tmp_path, token=blob_token)
+            logger.info(f"Requesting download of '{filename}' from Vercel Blob URL (env var) to '{local_tmp_path}'...")
+            download_successful = download_file_from_vercel_blob(
+                blob_url=url,
+                local_path=local_tmp_path,
+                token=blob_token_for_download # Pass token, helper can decide if it's used
+            )
+
+            if not download_successful:
+                all_downloads_successful = False
+                if is_critical:
+                    logger.error(f"Fatal: Failed to download critical file '{filename}' from Vercel Blob (URL from env var). Halting data load.")
+                    raise RuntimeError(f"Failed to download critical file {filename} from Vercel Blob.")
+                else:
+                    logger.warning(f"Could not download optional file '{filename}'. Will proceed without it if possible.")
+            else:
                 logger.info(f"Successfully downloaded '{filename}' to '{local_tmp_path}'.")
-            except VercelBlobException as e:
-                logger.error(f"Fatal: Failed to download '{filename}' from Vercel Blob (URL: {url}): {e}", exc_info=True)
-                # If critical files fail, re-raise. For optional, we might allow proceeding.
-                # if filename in [INDEX_FILENAME, MAPPING_FILENAME]: # INDEX_FILENAME removed
-                if filename == MAPPING_FILENAME:
-                    raise RuntimeError(f"Failed to download critical file {filename} from Vercel Blob.") from e
-                logger.warning(f"Could not download optional file {filename}. Will proceed without it.")
-            except Exception as e: # Catch any other unexpected errors during download
-                logger.error(f"Fatal: An unexpected error occurred downloading '{filename}' from Vercel Blob: {e}", exc_info=True)
-                # if filename in [INDEX_FILENAME, MAPPING_FILENAME]: # INDEX_FILENAME removed
-                if filename == MAPPING_FILENAME:
-                    raise RuntimeError(f"Unexpected error downloading critical file {filename} from Vercel Blob.") from e
-                logger.warning(f"Unexpected error downloading optional file {filename}. Will proceed without it.")
             
             # Assign current paths after successful download or if optional and URL missing
             # if filename == INDEX_FILENAME: current_index_path = local_tmp_path # FAISS Index removed

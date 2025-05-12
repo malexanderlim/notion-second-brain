@@ -9,6 +9,7 @@ langchain-community
 langchain-openai
 anthropic
 langchain-text-splitters
+requests
 
 # CORS
 fastapi-cors
@@ -16,9 +17,25 @@ fastapi-cors
 python-multipart
 
 # For Vercel Blob Storage
-vercel-blob==0.3.2
+# vercel-blob==0.3.2
 
 # Comment
 
 # Updated to trigger re-install of dependencies
-pinecone-client>=3.0.0,<4.0.0 
+pinecone-client>=3.0.0,<4.0.0
+# tiktoken # Seems to be a transitive dependency, but added explicitly for clarity if needed.
+# PyYAML # For config files potentially
+# python-dotenv # For local .env file loading
+# boto3 # If we were using S3 directly
+# google-cloud-storage # If we were using GCS directly
+# azure-storage-blob # If we were using Azure Blob directly
+
+# Testing & Dev
+# pytest
+# pytest-asyncio
+# httpx # For async HTTP requests in tests or future async implementations
+
+# Other utilities
+# backoff # For retry mechanisms (can be implemented manually if simple)
+# more_itertools # General utility, might not be strictly necessary
+# tqdm # For progress bars in CLI scripts 

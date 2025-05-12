@@ -13,12 +13,14 @@ import time
 import glob # For handling file globs
 from datetime import datetime # Ensure datetime is imported
 from pinecone import Pinecone, PineconeException # Import Pinecone
+import requests # Added
+import mimetypes # Added
 
-# Attempt to import vercel_blob and handle if not installed
-try:
-    import vercel_blob
-except ImportError:
-    vercel_blob = None # Allows script to run if vercel_blob is not installed and not used
+# Removed vercel_blob import
+# try:
+#     import vercel_blob
+# except ImportError:
+#     vercel_blob = None
 
 # Adjust path to import from the package
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '.')))
@@ -161,6 +163,58 @@ def extract_and_save_metadata_cache(mapping_data: list[dict], cache_file_path: s
         logger.info(f"Successfully saved metadata cache to {cache_file_path}")
     except Exception as e:
         logger.error(f"Failed to save metadata cache to {cache_file_path}: {e}", exc_info=True)
+
+# +++ Helper function for Vercel Blob Upload +++
+def upload_file_to_vercel_blob(local_file_path: str, blob_pathname: str, token: str):
+    VERCEL_BLOB_STORE_ID_URL_PART = os.getenv("VERCEL_BLOB_STORE_ID_URL_PART")
+    if not VERCEL_BLOB_STORE_ID_URL_PART:
+        logger.error("VERCEL_BLOB_STORE_ID_URL_PART environment variable not set. Cannot upload.")
+        return None
+
+    # Ensure blob_pathname does not start with a slash for URL construction,
+    # but preserve it for user-facing messages if needed.
+    clean_blob_pathname = blob_pathname.lstrip('/')
+    upload_url = f"https://{VERCEL_BLOB_STORE_ID_URL_PART}/{clean_blob_pathname}"
+    
+    content_type, _ = mimetypes.guess_type(local_file_path)
+    if content_type is None:
+        content_type = "application/octet-stream" # Default MIME type
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        # Vercel's JS SDK @vercel/blob uses x-api-version and other x- headers.
+        # For basic PUT, Content-Type is standard.
+        # We'll add 'x-content-type' as per @vercel/blob's observed behavior,
+        # and 'x-add-random-suffix' which is a common and useful option.
+        "x-content-type": content_type,
+        "x-add-random-suffix": "true", # Default in JS SDK, usually good. Set to "false" to disable.
+        # "x-cache-control-max-age": "31536000", # Optional: 1 year, Vercel's default
+    }
+
+    with open(local_file_path, "rb") as f:
+        file_data = f.read()
+    
+    logger.info(f"Attempting to PUT to Vercel Blob: {upload_url} for local file: {local_file_path}")
+    logger.debug(f"Upload headers (excluding Authorization): {{'x-content-type': '{headers['x-content-type']}', 'x-add-random-suffix': '{headers['x-add-random-suffix']}'}}")
+    
+    try:
+        response = requests.put(upload_url, headers=headers, data=file_data, timeout=60) # 60s timeout
+        response.raise_for_status() 
+        response_json = response.json()
+        logger.info(f"Successfully uploaded {local_file_path} as {blob_pathname}. Blob URL: {response_json.get('url')}")
+        return response_json
+    except requests.exceptions.HTTPError as e_http:
+        logger.error(f"HTTP error uploading {local_file_path} to Vercel Blob at {upload_url}: {e_http}")
+        if e_http.response is not None:
+            logger.error(f"Response status: {e_http.response.status_code}, Response text: {e_http.response.text}")
+        return None
+    except requests.exceptions.RequestException as e_req:
+        logger.error(f"RequestException (e.g., connection error, timeout) uploading {local_file_path} to Vercel Blob at {upload_url}: {e_req}")
+        return None
+    except json.JSONDecodeError as e_json:
+        logger.error(f"Failed to decode JSON response after uploading {local_file_path} to Vercel Blob. Status: {response.status_code}, Response text: {response.text[:200]}...")
+        return None # Or return a partial success if appropriate
+# --- End Helper function ---
 
 async def main():
     parser = argparse.ArgumentParser(description="Build or update a Pinecone index from exported Notion data JSON files.") # Updated description
@@ -561,51 +615,50 @@ async def main():
     # --- Upload to Vercel Blob if requested ---
     if args.upload_to_blob:
         logger.info("Uploading generated files to Vercel Blob storage...")
-        if not vercel_blob:
-            logger.error("Vercel Blob SDK not available/imported. Cannot upload.")
+        blob_token = os.getenv("VERCEL_BLOB_ACCESS_TOKEN")
+        if not blob_token:
+            logger.error("VERCEL_BLOB_ACCESS_TOKEN not set. Cannot upload.")
+        elif not os.getenv("VERCEL_BLOB_STORE_ID_URL_PART"):
+            logger.error("VERCEL_BLOB_STORE_ID_URL_PART environment variable not set. Cannot construct upload URL.")
         else:
-            blob_token = os.getenv("VERCEL_BLOB_ACCESS_TOKEN")
-            if not blob_token:
-                logger.error("VERCEL_BLOB_ACCESS_TOKEN not set. Cannot upload.")
-            else:
-                files_to_upload = {
-                    "mapping": (args.mapping_file, os.getenv("MAPPING_JSON_BLOB_URL")),
-                    "timestamp": (args.last_entry_timestamp_file, os.getenv("LAST_ENTRY_TIMESTAMP_BLOB_URL")), # Add timestamp file
-                    "metadata_cache": (metadata_cache_file, os.getenv("METADATA_CACHE_BLOB_URL")),
-                    # schema.json is not generated by this script, but if it were:
-                    # "schema": ("schema.json", os.getenv("SCHEMA_JSON_BLOB_URL")) 
-                }
-                # Removed: "index": (args.index_file, os.getenv("FAISS_INDEX_BLOB_URL"))
+            # Define files to upload and their desired pathnames in the blob store
+            # The pathname is relative to the root of your blob store.
+            files_to_upload_info = [
+                {"local_path": args.mapping_file, "blob_pathname": os.path.basename(args.mapping_file)},
+                {"local_path": args.last_entry_timestamp_file, "blob_pathname": os.path.basename(args.last_entry_timestamp_file)},
+                {"local_path": metadata_cache_file, "blob_pathname": os.path.basename(metadata_cache_file)},
+                # Add schema.json if it's generated and needs to be uploaded
+                # {"local_path": "schema.json", "blob_pathname": "schema.json"}, 
+            ]
 
-                for name, (local_path, blob_url_env) in files_to_upload.items():
-                    if not blob_url_env:
-                        logger.warning(f"Blob URL environment variable for {name} ({local_path}) is not set. Skipping upload.")
-                        continue
-                    if not os.path.exists(local_path):
-                        logger.warning(f"Local file {local_path} for {name} does not exist. Skipping upload.")
-                        continue
-                    
-                    try:
-                        logger.info(f"Uploading {name} from {local_path} to Vercel Blob (URL derived from env var)...")
-                        # The put URL should be the desired path in the blob, not the full URL with SAS token.
-                        # Using the filename part of the blob_url_env if it's a full URL, or a simpler name.
-                        # Vercel `put` expects `pathname` which is like `articles/article.txt`
-                        # For simplicity, let's assume the env var provides the full URL and we extract a safe pathname
-                        # This part might need adjustment based on how vercel_blob expects the URL/pathname for `put`
-                        # A common pattern is to use the filename as the pathname in the blob.
-                        pathname_in_blob = os.path.basename(local_path)
-                        
-                        with open(local_path, 'rb') as f_blob_data:
-                            blob_put_response = vercel_blob.put(
-                                pathname=pathname_in_blob, # e.g., "index_mapping.json"
-                                body=f_blob_data,
-                                token=blob_token
-                                # add_random_suffix=False # Usually good to keep True unless specific URLs are needed
-                            )
-                        logger.info(f"Successfully uploaded {name} to Vercel Blob. URL: {blob_put_response.get('url')}")
-                    except Exception as e:
-                        logger.error(f"Failed to upload {name} ({local_path}) to Vercel Blob: {e}", exc_info=True)
-        logger.info("Vercel Blob upload process finished.")
+            successful_uploads = 0
+            for file_info in files_to_upload_info:
+                local_p = file_info["local_path"]
+                blob_pn = file_info["blob_pathname"]
+                
+                if not os.path.exists(local_p):
+                    logger.warning(f"Local file {local_p} for blob pathname {blob_pn} does not exist. Skipping upload.")
+                    continue
+                
+                logger.info(f"Preparing to upload {local_p} to Vercel Blob as {blob_pn}...")
+                upload_response = upload_file_to_vercel_blob(
+                    local_file_path=local_p,
+                    blob_pathname=blob_pn,
+                    token=blob_token
+                )
+                if upload_response and upload_response.get("url"):
+                    logger.info(f"Successfully uploaded {blob_pn}. Blob URL: {upload_response['url']}")
+                    # If you need to store these URLs (e.g., in env vars for the backend), this is where you'd get them.
+                    # For now, we just log. The backend will download using predefined pathnames.
+                    successful_uploads += 1
+                else:
+                    logger.error(f"Failed to upload {blob_pn} from {local_p}.")
+            
+            if successful_uploads == len([f for f in files_to_upload_info if os.path.exists(f["local_path"])]):
+                logger.info("All existing local files successfully uploaded to Vercel Blob.")
+            else:
+                logger.warning("Some files failed to upload to Vercel Blob. Check logs for details.")
+        logger.info("Vercel Blob upload process finished (or skipped).")
 
 
     logger.info("Build process finished.")
