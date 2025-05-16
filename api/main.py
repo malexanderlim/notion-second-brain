@@ -4,11 +4,37 @@ from pydantic import BaseModel, HttpUrl
 from typing import List, Dict, Any, Optional, Union
 import os
 import logging # Import logging
+import sys # Added for stderr
 from dotenv import load_dotenv
 from datetime import datetime, timezone # Added timezone
 
 # --- Load Environment Variables First ---
-load_dotenv() 
+load_dotenv()
+
+# --- Vercel GCP Credentials Handling ---
+# This block writes the GCP service account JSON from an environment variable
+# to a temporary file, so GOOGLE_APPLICATION_CREDENTIALS can point to it.
+GCP_SERVICE_ACCOUNT_JSON_CONTENT_ENV_VAR = "GCP_SERVICE_ACCOUNT_JSON_CONTENT"
+# GOOGLE_APPLICATION_CREDENTIALS should be set in Vercel to e.g., /tmp/gcp-credentials.json
+gcp_json_string = os.getenv(GCP_SERVICE_ACCOUNT_JSON_CONTENT_ENV_VAR)
+google_creds_file_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+
+if gcp_json_string and google_creds_file_path:
+    try:
+        # Ensure the target directory for the credentials file exists
+        os.makedirs(os.path.dirname(google_creds_file_path), exist_ok=True)
+        with open(google_creds_file_path, 'w') as f:
+            f.write(gcp_json_string)
+        logging.info(f"Successfully wrote GCP service account credentials to {google_creds_file_path}")
+    except Exception as e:
+        logging.error(f"CRITICAL: Failed to write GCP service account credentials to {google_creds_file_path}: {e}", exc_info=True)
+        # Depending on the desired behavior, you might want to exit or raise an error here
+        # For now, it logs critical and continues, but GCS operations will likely fail.
+elif not gcp_json_string:
+    logging.warning(f"GCP_SERVICE_ACCOUNT_JSON_CONTENT environment variable not set. GCS operations may fail if credentials are not found elsewhere.")
+elif not google_creds_file_path:
+    logging.warning(f"GOOGLE_APPLICATION_CREDENTIALS environment variable not set to a file path. GCS operations may fail.")
+# --- End Vercel GCP Credentials Handling ---
 
 # --- Import RAG logic AFTER loading .env ---
 # Ensure functions needed for initialization are imported

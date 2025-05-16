@@ -6,7 +6,7 @@ A project to extract journal entries from Notion, process them, build a Retrieva
 
 This project implements a full RAG pipeline that can:
 1. Extract journal entries from Notion via their API.
-2. Process and index this data using vector embeddings (FAISS) and metadata.
+2. Process and index this data using Pinecone for vector embeddings and metadata, with artifacts stored in Google Cloud Storage.
 3. Offer a web-based chat interface to query your journal data.
 4. Allow selection from multiple Large Language Models (e.g., OpenAI GPT series, Anthropic Claude series).
 5. Provide token usage and estimated cost per query.
@@ -16,23 +16,23 @@ This project implements a full RAG pipeline that can:
 ## Technology Stack
 
 - **Backend**: Python, FastAPI (with a modular structure: `rag_initializer`, `rag_query`, `query_analyzer`, `retrieval_logic`, `llm_interface`, etc.)
-- **Data Processing & Indexing**: Python, `requests`, `faiss-cpu`, `openai` (for embeddings)
+- **Data Processing & Indexing**: Python, `requests`, `openai` (for embeddings), `pinecone-client`, `google-cloud-storage`
 - **LLM Integration**: OpenAI API, Anthropic API
 - **Frontend**: React (Vite + TypeScript), Tailwind CSS, shadcn/ui, axios
-- **Storage**: JSON files for data export, FAISS index, and mappings.
+- **Storage**: Google Cloud Storage for monthly JSON data exports (from Notion) and for storing index artifacts (schema, entry mappings, metadata cache, last update timestamp). Pinecone for vector storage.
 
 ## Development Phases (Current Status)
 
 Many of the initial phases outlined below have been completed or superseded by the current RAG implementation with a web UI.
 
 ### Phase 1: Notion Data Extraction (MVP) - LARGELY COMPLETE
-- Functionality to connect to Notion, extract entries, and save them to JSON is implemented via `cli.py`.
+- Functionality to connect to Notion, extract entries, and save them as monthly JSON files to Google Cloud Storage is implemented via `cli.py`.
 
 ### Phase 2: Data Processing and Storage - LARGELY COMPLETE
-- `build_index.py` handles processing exported JSON, creating embeddings, building the FAISS index (`index.faiss`), creating entry-to-index mappings (`index_mapping.json`), and caching metadata (`metadata_cache.json`), and recording the timestamp of the latest processed entry (`last_entry_update_timestamp.txt`).
+- `build_index.py` handles processing exported JSONs (read from Google Cloud Storage), creating OpenAI embeddings, upserting vectors to Pinecone, and storing related artifacts (entry mappings `index_mapping.json`, `metadata_cache.json`, `schema.json`, and `last_entry_update_timestamp.txt`) in Google Cloud Storage.
 
 ### Phase 3: Query Interface - LARGELY COMPLETE
-- `cli.py` provides basic CLI query functionality.
+- `cli.py` provides basic CLI query functionality (now leveraging the backend's RAG engine).
 - The FastAPI backend (`backend/main.py`, `backend/rag_query.py`) implements the full RAG pipeline, serving as the query engine for the web UI.
 - Features include model selection, token counting, cost estimation, metadata filtering, semantic search, and retrieval of the last sync timestamp.
 
@@ -90,20 +90,29 @@ These steps assume you have Python 3, Node.js (with npm or yarn), and `git` inst
       NOTION_DATABASE_ID=YOUR_DATABASE_ID
       OPENAI_API_KEY=sk-YOUR_OPENAI_API_KEY
       ANTHROPIC_API_KEY=sk-YOUR_ANTHROPIC_API_KEY # Add your Anthropic key
+      PINECONE_API_KEY=YOUR_PINECONE_API_KEY
+      PINECONE_INDEX_NAME=your-pinecone-index-name
+      GCS_BUCKET_NAME=your-gcs-bucket-name
+      # GCS_EXPORT_PREFIX=notion_exports/ (Optional, defaults to this)
+      # GCS_INDEX_ARTIFACTS_PREFIX=index_artifacts/ (Optional, defaults to this)
       ```
 
 5.  **Export Notion Data & Build Index:**
-    - (If you haven't already) Export your Notion data using `cli.py`.
-      For example, to export all data for a specific month (e.g., January 2024) to be used for indexing:
+    - (If you haven't already) Export your Notion data using `cli.py`. This will upload JSON files to your GCS bucket.
+      For example, to export all data for a specific month (e.g., January 2024):
       ```bash
       python cli.py --export-month 2024-01 
       ```
-      This creates `output/2024-01.json`. You might want to run this for all relevant months, or use `--period all` for a single comprehensive file (though monthly can be more manageable for very large journals).
-    - Build the RAG index from the exported JSON files:
+      This saves `YYYY-MM.json` to your configured GCS bucket under the `GCS_EXPORT_PREFIX`. You might want to run this for all relevant months, or use the `--export` flag (no month argument) for a sequential export of all months containing data.
+    - (Recommended) Ensure your Notion database schema is uploaded to GCS:
+      ```bash
+      python cli.py --schema
+      ```
+    - Build the RAG index. This will process `*.json` files from your `GCS_EXPORT_PREFIX` in GCS, generate embeddings, upsert to Pinecone, and save artifacts to `GCS_INDEX_ARTIFACTS_PREFIX`:
       ```bash
       python build_index.py 
       ```
-      This will process all `*.json` files in the `output/` directory by default and create `index.faiss`, `index_mapping.json`, `metadata_cache.json`, and `last_entry_update_timestamp.txt` in the project root. Ensure `schema.json` is also present or correctly generated/placed in the root, as it's used by the RAG system.
+      This creates `index_mapping.json`, `metadata_cache.json`, `last_entry_update_timestamp.txt`, and uploads/updates `schema.json` (if found locally or if `cli.py --schema` was run) in your GCS bucket under the `GCS_INDEX_ARTIFACTS_PREFIX`.
 
 6.  **Run the Backend Server:**
     - Ensure your Python virtual environment (created in step 2) is active.

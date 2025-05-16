@@ -25,6 +25,8 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import JSONLoader
 
+from google.cloud import storage # Added for GCS
+
 logger = logging.getLogger("api.rag_initializer")
 
 # --- Constants for file names (used for both local and remote) ---
@@ -59,6 +61,10 @@ _rag_data_loaded = False
 # DOCSTORE_BLOB_NAME = RAG_CONFIG["DOCSTORE_FILENAME"]
 # TIMESTAMP_BLOB_NAME = RAG_CONFIG["LAST_ENTRY_UPDATE_TIMESTAMP_FILENAME"]
 
+# --- GCS Configuration (from environment) ---
+GCS_BUCKET_NAME_ENV = os.getenv("GCS_BUCKET_NAME")
+GCS_INDEX_ARTIFACTS_PREFIX_ENV = os.getenv("GCS_INDEX_ARTIFACTS_PREFIX", "index_artifacts/")
+
 # --- Custom Exceptions ---
 class RAGSystemNotInitializedError(Exception):
     pass
@@ -66,299 +72,244 @@ class RAGSystemNotInitializedError(Exception):
 class LLMClientNotInitializedError(Exception):
     pass
 
-# --- Helper function for Vercel Blob Download ---
-def download_file_from_vercel_blob(blob_url: str, local_path: Path, token: str | None = None):
-    logger.info(f"Attempting to download from Vercel Blob URL: {blob_url[:60]}... to {local_path}")
-    headers = {}
-    # The VERCEL_BLOB_ACCESS_TOKEN might be needed if the blob URLs are not public
-    # or if they are SAS URLs that require this specific token for this operation.
-    # Vercel docs say URLs are public but unguessable. For direct GET, token might not be needed.
-    # We will try without first, and add if necessary based on errors.
-    # However, if the `token` argument is explicitly provided (e.g., from VERCEL_BLOB_ACCESS_TOKEN),
-    # we should use it, as some blob operations might require it even for GET if they go via an API gateway first.
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-        logger.debug(f"Using Authorization header for download from {blob_url[:60]}...")
-
+# --- GCS Helper Functions (Simplified for this module) ---
+def _get_gcs_client_internal():
     try:
-        response = requests.get(blob_url, headers=headers, stream=True, timeout=60) # 60s timeout
-        response.raise_for_status() # Raises an HTTPError for bad responses (4XX or 5XX)
+        return storage.Client()
+    except Exception as e:
+        logger.error(f"Failed to initialize GCS client in rag_initializer: {e}", exc_info=True)
+        return None
+
+def download_blob_from_gcs_to_local_path(bucket_name: str, blob_name: str, local_destination_path: Path) -> bool:
+    storage_client = _get_gcs_client_internal()
+    if not storage_client or not bucket_name:
+        logger.error(f"GCS client or bucket name not available for downloading {blob_name}.")
+        return False
+    try:
+        bucket = storage_client.bucket(bucket_name)
+        blob = bucket.blob(blob_name)
         
         # Ensure parent directory for local_path exists
-        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_destination_path.parent.mkdir(parents=True, exist_ok=True)
         
-        with open(local_path, "wb") as f:
-            for chunk in response.iter_content(chunk_size=8192):
-                f.write(chunk)
-        logger.info(f"Successfully downloaded from {blob_url} to {local_path}")
+        logger.info(f"Attempting to download GCS blob gs://{bucket_name}/{blob_name} to {local_destination_path}")
+        blob.download_to_filename(str(local_destination_path))
+        logger.info(f"Successfully downloaded GCS blob to {local_destination_path}")
         return True
-    except requests.exceptions.HTTPError as e_http:
-        logger.error(f"HTTP error downloading from Vercel Blob URL {blob_url}: {e_http}")
-        if e_http.response is not None:
-            logger.error(f"Response status: {e_http.response.status_code}, Response text: {e_http.response.text}")
+    except Exception as e:
+        logger.error(f"Error downloading GCS blob gs://{bucket_name}/{blob_name} to {local_destination_path}: {e}", exc_info=True)
+        # Clean up potentially partially downloaded file
+        if local_destination_path.exists():
+            try:
+                local_destination_path.unlink()
+            except OSError:
+                pass # Ignore errors during cleanup
         return False
-    except requests.exceptions.RequestException as e_req:
-        logger.error(f"RequestException (e.g., connection error, timeout) downloading from {blob_url}: {e_req}")
-        return False
-# --- End Helper function ---
+# --- End GCS Helper Functions ---
+
+# Remove old Vercel Blob download helper
+# def download_file_from_vercel_blob(blob_url: str, local_path: Path, token: str | None = None): ...
 
 def load_rag_data():
-    """Loads necessary data for RAG: index, mapping (list), metadata cache, schema.
-       Uses a flag to prevent reloading if already loaded.
-       Data can be loaded from local disk or Vercel Blob storage based on DATA_SOURCE_MODE.
+    """Loads necessary data for RAG: mapping, metadata cache, schema.
+       Data can be loaded from local disk or GCS based on DATA_SOURCE_MODE.
     """
-    global index, mapping_data_list, index_to_entry, distinct_metadata_values, schema_properties
-    global _rag_data_loaded
+    global mapping_data_list, index_to_entry, distinct_metadata_values, schema_properties
+    global _rag_data_loaded, index # index refers to pinecone_index_instance
     
+    # Initialize path variables to ensure they are always defined in this scope
+    current_mapping_path: Path | None = None
+    current_metadata_path: Path | None = None
+    current_schema_path: Path | None = None
+
     if _rag_data_loaded:
         logger.debug("RAG data already loaded. Skipping reload.")
         return
 
-    # Ensure Pinecone client is initialized before loading data that might depend on it
-    # (though for now, load_rag_data mainly loads mapping files, not directly using the index object)
     if not pinecone_index_instance: # Check if Pinecone is ready
-        logger.warning("Pinecone client/index not initialized. Data loading might be incomplete if it were to rely on an active index connection immediately.")
-        # Depending on strictness, could raise an error here or try to proceed with just file loading.
-        # For now, we primarily load mapping files, schema, etc.
+        logger.warning("Pinecone client/index not initialized. Data loading might be incomplete.")
 
     logger.info("--- Starting RAG Data Loading (Mapping, Schema, Metadata Cache) --- ")
 
+    # DATA_SOURCE_MODE: 'local' (default) or 'gcs'
     data_source_mode = os.getenv('DATA_SOURCE_MODE', 'local').lower()
     logger.info(f"DATA_SOURCE_MODE set to: {data_source_mode}")
 
-    # --- Determine base path for data files ---
-    # These will be the actual paths used for loading, whether local or remote (temp)
-    current_mapping_path: Path
-    current_metadata_path: Path
-    current_schema_path: Path
+    if data_source_mode == 'gcs':
+        if not GCS_BUCKET_NAME_ENV:
+            logger.error("Fatal: DATA_SOURCE_MODE is 'gcs' but GCS_BUCKET_NAME env var is not set.")
+            raise RuntimeError("GCS_BUCKET_NAME not set for GCS data source mode.")
+        
+        gcs_prefix = GCS_INDEX_ARTIFACTS_PREFIX_ENV
+        if gcs_prefix and not gcs_prefix.endswith('/'):
+            gcs_prefix += '/'
 
-    if data_source_mode == 'remote':
-        # Check for requests, though it should be standard
-        # No specific SDK check needed now beyond Python's capabilities
-
-        remote_tmp_dir = Path("/tmp/rag_data")
+        remote_tmp_dir = Path("/tmp/rag_data_gcs") # Use a distinct temp dir
         try:
             remote_tmp_dir.mkdir(parents=True, exist_ok=True)
-            logger.info(f"Ensured temporary directory for remote data: {remote_tmp_dir}")
+            logger.info(f"Ensured temporary directory for GCS data: {remote_tmp_dir}")
         except OSError as e:
             logger.error(f"Fatal: Could not create temporary directory {remote_tmp_dir}: {e}", exc_info=True)
             raise RuntimeError(f"Failed to create temporary directory {remote_tmp_dir}") from e
 
-        # VERCEL_BLOB_ACCESS_TOKEN might be needed by download_file_from_vercel_blob if URLs are not fully public
-        # or require auth even for GETs. For now, the helper function can try without if token=None.
-        # However, it's good practice to fetch it here if we anticipate needing it.
-        blob_token_for_download = os.getenv("VERCEL_BLOB_ACCESS_TOKEN") 
-        if not blob_token_for_download:
-             logger.warning("VERCEL_BLOB_ACCESS_TOKEN not set. Downloads will be attempted without Authorization header.")
-             # This might be fine if blob URLs are fully public.
-
-        file_env_vars_and_paths = {
-            # INDEX_FILENAME: (os.getenv("FAISS_INDEX_BLOB_URL"), remote_tmp_dir / INDEX_FILENAME), # FAISS Index removed
-            MAPPING_FILENAME: (os.getenv("MAPPING_JSON_BLOB_URL"), remote_tmp_dir / MAPPING_FILENAME),
-            METADATA_FILENAME: (os.getenv("METADATA_CACHE_BLOB_URL"), remote_tmp_dir / METADATA_FILENAME),
-            SCHEMA_FILENAME: (os.getenv("SCHEMA_JSON_BLOB_URL"), remote_tmp_dir / SCHEMA_FILENAME),
+        # Define which file maps to which local path variable
+        files_config = {
+            MAPPING_FILENAME: {"critical": True, "target_path_var": "current_mapping_path"},
+            METADATA_FILENAME: {"critical": False, "target_path_var": "current_metadata_path"},
+            SCHEMA_FILENAME: {"critical": False, "target_path_var": "current_schema_path"},
         }
 
-        all_downloads_successful = True
-        for filename, (url, local_tmp_path) in file_env_vars_and_paths.items():
-            is_critical = (filename == MAPPING_FILENAME)
-            if not url:
-                # For schema.json and metadata_cache.json, it might be optional if they don't exist.
-                # However, index and mapping are critical.
-                # if filename in [INDEX_FILENAME, MAPPING_FILENAME]: # INDEX_FILENAME removed from critical check
-                if filename == MAPPING_FILENAME: # Only MAPPING_FILENAME is critical now from this list
-                    logger.error(f"Fatal: Blob URL for critical file '{filename}' is not set in environment variables.")
-                    raise RuntimeError(f"Missing Blob URL for {filename}.")
-                else:
-                    logger.warning(f"Blob URL for optional file '{filename}' is not set. Will attempt to proceed without it if possible.")
-                    # Ensure the path points to something, even if it won't exist, so later checks handle it.
-                    if filename == METADATA_FILENAME: current_metadata_path = local_tmp_path 
-                    if filename == SCHEMA_FILENAME: current_schema_path = local_tmp_path
-                    continue # Skip download if URL is not set for optional files
-
-            logger.info(f"Requesting download of '{filename}' from Vercel Blob URL (env var) to '{local_tmp_path}'...")
-            download_successful = download_file_from_vercel_blob(
-                blob_url=url,
-                local_path=local_tmp_path,
-                token=blob_token_for_download # Pass token, helper can decide if it's used
+        for filename, config_item in files_config.items():
+            gcs_blob_name = f"{gcs_prefix}{filename}"
+            local_tmp_path = remote_tmp_dir / filename
+            
+            logger.info(f"Requesting download of '{filename}' from GCS gs://{GCS_BUCKET_NAME_ENV}/{gcs_blob_name} to '{local_tmp_path}'...")
+            download_successful = download_blob_from_gcs_to_local_path(
+                bucket_name=GCS_BUCKET_NAME_ENV,
+                blob_name=gcs_blob_name,
+                local_destination_path=local_tmp_path
             )
 
-            if not download_successful:
-                all_downloads_successful = False
-                if is_critical:
-                    logger.error(f"Fatal: Failed to download critical file '{filename}' from Vercel Blob (URL from env var). Halting data load.")
-                    raise RuntimeError(f"Failed to download critical file {filename} from Vercel Blob.")
-                else:
-                    logger.warning(f"Could not download optional file '{filename}'. Will proceed without it if possible.")
+            if download_successful:
+                logger.info(f"Successfully downloaded '{filename}' from GCS to '{local_tmp_path}'.")
+                # Assign the successful download path to the correct variable
+                if config_item["target_path_var"] == "current_mapping_path":
+                    current_mapping_path = local_tmp_path
+                elif config_item["target_path_var"] == "current_metadata_path":
+                    current_metadata_path = local_tmp_path
+                elif config_item["target_path_var"] == "current_schema_path":
+                    current_schema_path = local_tmp_path
             else:
-                logger.info(f"Successfully downloaded '{filename}' to '{local_tmp_path}'.")
-            
-            # Assign current paths after successful download or if optional and URL missing
-            # if filename == INDEX_FILENAME: current_index_path = local_tmp_path # FAISS Index removed
-            if filename == MAPPING_FILENAME: current_mapping_path = local_tmp_path
-            elif filename == METADATA_FILENAME: current_metadata_path = local_tmp_path
-            elif filename == SCHEMA_FILENAME: current_schema_path = local_tmp_path
+                if config_item["critical"]:
+                    logger.error(f"Fatal: Failed to download critical file '{filename}' from GCS. Halting data load.")
+                    raise RuntimeError(f"Failed to download critical file {filename} from GCS.")
+                else:
+                    logger.warning(f"Could not download optional file '{filename}' from GCS. Will proceed without it if possible.")
+                    # Ensure path var is None if download failed for optional file
+                    if config_item["target_path_var"] == "current_metadata_path":
+                        current_metadata_path = None
+                    elif config_item["target_path_var"] == "current_schema_path":
+                        current_schema_path = None
         
-        # Check if critical paths were set (they would be if download succeeded or if URL was missing but error was raised)
-        # if not 'current_index_path' in locals() or not 'current_mapping_path' in locals(): # current_index_path check removed
-        if not 'current_mapping_path' in locals():
-             # This case should ideally be caught by earlier errors, but as a safeguard:
-            logger.error("Fatal: Critical data paths (mapping) were not established in remote mode.")
-            raise RuntimeError("Critical remote data paths not established.")
-        if not 'current_metadata_path' in locals(): # Ensure it's defined even if download failed/skipped for optional
-            current_metadata_path = remote_tmp_dir / METADATA_FILENAME
-        if not 'current_schema_path' in locals(): # Ensure it's defined
-            current_schema_path = remote_tmp_dir / SCHEMA_FILENAME
-
-
     elif data_source_mode == 'local':
-        # In local mode, paths are relative to LOCAL_DATA_PATH or current dir by default
-        # `rag_config.py` provides default *filenames* (e.g., "index.faiss")
-        # `LOCAL_DATA_PATH` defaults to '.' (project root) if not set.
         local_data_base_dir = Path(os.getenv('LOCAL_DATA_PATH', '.'))
         logger.info(f"Local data path set to: {local_data_base_dir.resolve()}")
-
-        # current_index_path = local_data_base_dir / DEFAULT_INDEX_FILENAME # FAISS Index removed
         current_mapping_path = local_data_base_dir / MAPPING_FILENAME
         current_metadata_path = local_data_base_dir / METADATA_FILENAME
         current_schema_path = local_data_base_dir / SCHEMA_FILENAME
     else:
-        logger.error(f"Fatal: Invalid DATA_SOURCE_MODE: '{data_source_mode}'. Must be 'local' or 'remote'.")
+        logger.error(f"Fatal: Invalid DATA_SOURCE_MODE: '{data_source_mode}'. Must be 'local' or 'gcs'.")
         raise ValueError(f"Invalid DATA_SOURCE_MODE: {data_source_mode}")
 
     # --- Load data using the determined paths ---
-    # FAISS Index loading is removed. The 'index' global will be the pinecone_index_instance.
-    # try:
-    #     logger.info(f"Loading FAISS index from {current_index_path}...")
-    #     index = faiss.read_index(str(current_index_path)) # faiss expects string path
-    #     logger.info(f"Index loaded successfully. Total vectors: {index.ntotal}")
-    # except Exception as e:
-    #     logger.error(f"Fatal: Failed to load FAISS index from {current_index_path}: {e}", exc_info=True)
-    #     raise RuntimeError(f"Could not load FAISS index from {current_index_path}") from e
-
-    global index # This now refers to the pinecone_index_instance
-    if not pinecone_index_instance and not index: # Check if pinecone index is available
+    if not pinecone_index_instance and not index: # Pinecone index is assigned to global 'index' later
         logger.warning("Pinecone index instance is not available. RAG system might not function correctly for retrieval.")
-        # Depending on use case, might want to raise error or allow proceeding if only mapping is needed for some ops
 
     try:
+        # Ensure current_mapping_path is not None before proceeding, as it's critical
+        if current_mapping_path is None:
+            logger.error("Fatal: current_mapping_path was not set. This indicates a critical file was not loaded.")
+            raise FileNotFoundError("Mapping file path was not determined.")
+        
         logger.info(f"Loading index mapping list from {current_mapping_path}...")
-        with open(current_mapping_path, 'r') as f:
-            loaded_mapping_data = json.load(f) 
-            if not isinstance(loaded_mapping_data, list):
-                raise TypeError(f"{current_mapping_path} does not contain a JSON list.")
-        mapping_data_list = loaded_mapping_data 
-        logger.info(f"Mapping list loaded successfully. Total entries: {len(mapping_data_list)}")
-
-        # The check against index.ntotal needs to be re-evaluated for Pinecone.
-        # For now, we'll skip the direct comparison with Pinecone's total vectors here.
-        # If pinecone_index_instance:
-        #     try:
-        #         stats = pinecone_index_instance.describe_index_stats()
-        #         pinecone_total_vectors = stats.total_vector_count
-        #         if len(mapping_data_list) != pinecone_total_vectors:
-        #             logger.warning(f"Mismatch: Pinecone index has {pinecone_total_vectors} vectors, "
-        #                            f"but mapping list has {len(mapping_data_list)} entries. "
-        #                            "This could indicate an inconsistency.")
-        #     except Exception as e:
-        #         logger.warning(f"Could not get Pinecone index stats to verify mapping length: {e}")
-
-
-        temp_index_to_entry = {} 
-        for i, entry_data in enumerate(mapping_data_list): # Changed 'entry' to 'entry_data' to avoid conflict if 'entry' is a pinecone object
-            if not isinstance(entry_data, dict):
-                logger.warning(f"Skipping non-dictionary item at index {i} in mapping list: {entry_data}")
-                continue
-            
-            # IMPORTANT: Pinecone uses string IDs.
-            # We assume 'index_mapping.json' now contains entries where each dict
-            # has a unique string ID (e.g., 'page_id' or 'vector_id') that was used for Pinecone.
-            # This ID should be used to key 'index_to_entry'.
-            # For MVP, let's assume 'page_id' is the string ID.
-            # build_index.py will need to ensure this 'page_id' is used for upserting to Pinecone.
-
-            vector_id = entry_data.get('page_id') # Assuming 'page_id' is the string ID. Make this configurable if needed.
-                                                # Or, look for a dedicated 'vector_id' field if build_index.py adds one.
-
-            if not vector_id:
-                logger.warning(f"Entry at index {i} in mapping list is missing 'page_id' (expected as string vector ID). Skipping: {entry_data.get('title', 'N/A')}")
-                continue
-            
-            if not isinstance(vector_id, str):
-                # Attempt to stringify, but log a warning as this implies an issue with how index_mapping.json was created.
-                logger.warning(f"Vector ID ('page_id': {vector_id}) for entry '{entry_data.get('title', 'N/A')}' is not a string. Attempting to cast. This should be fixed in build_index.py.")
-                vector_id = str(vector_id)
-
-            # entry_data['faiss_index'] = i # This is no longer relevant
-            entry_data['vector_id'] = vector_id # Store the string ID used for Pinecone
-
-            if 'entry_date' in entry_data and isinstance(entry_data['entry_date'], str):
+        if not current_mapping_path.exists():
+            raise FileNotFoundError(f"Mapping file not found at {current_mapping_path}. This is critical.")
+        with open(current_mapping_path, 'r', encoding='utf-8') as f:
+            loaded_mapping_file_content = json.load(f) 
+            # Expecting format from build_index: {"description": ..., "entries": [...]}
+            if isinstance(loaded_mapping_file_content, dict) and "entries" in loaded_mapping_file_content:
+                mapping_data_list = loaded_mapping_file_content["entries"]
+                if not isinstance(mapping_data_list, list):
+                    raise TypeError(f"Key 'entries' in {current_mapping_path} is not a list.")
+            elif isinstance(loaded_mapping_file_content, list): # Support old direct list format too
+                logger.warning(f"Mapping file {current_mapping_path} is a direct list. Prefer format with 'entries' key.")
+                mapping_data_list = loaded_mapping_file_content
+            else:
+                 raise TypeError(f"{current_mapping_path} does not contain a JSON list or a dict with an 'entries' list.")
+        logger.info(f"Mapping list loaded successfully with {len(mapping_data_list)} entries.")
+        
+        # Convert entry_date strings to datetime.date objects
+        for entry_map_item in mapping_data_list: # Use a different variable name to avoid confusion with 'entry' module
+            date_str = entry_map_item.get("entry_date")
+            if date_str and isinstance(date_str, str):
                 try:
-                    entry_data['entry_date'] = date.fromisoformat(entry_data['entry_date'])
+                    entry_map_item["entry_date"] = date.fromisoformat(date_str)
                 except ValueError:
-                    page_id_for_log = entry_data.get('page_id', f'index {i}')
-                    logger.warning(f"Could not parse date string: {entry_data['entry_date']} for entry {page_id_for_log}")
-                    entry_data['entry_date'] = None
-            
-            temp_index_to_entry[vector_id] = entry_data # Use string vector_id as key
-        index_to_entry = temp_index_to_entry 
-        logger.info(f"Processed mapping list into index_to_entry lookup. Size: {len(index_to_entry)} (keyed by string vector IDs)")
-            
+                    logger.warning(f"Could not parse date string '{date_str}' for entry_id {entry_map_item.get('page_id')}. Setting to None.")
+                    entry_map_item["entry_date"] = None # Set to None if parsing fails
+            elif isinstance(date_str, date): # Already a date object, do nothing
+                pass
+            else: # Missing or not a string/date, ensure it's None if not already
+                if "entry_date" in entry_map_item and entry_map_item["entry_date"] is not None:
+                    logger.debug(f"entry_date for {entry_map_item.get('page_id')} is {type(entry_map_item.get('entry_date'))}, not string or date. Setting to None.")
+                entry_map_item["entry_date"] = None
+
+        # Create index_to_entry from mapping_data_list (if FAISS was used, this mapped faiss index to entry)
+        # For Pinecone, the 'pinecone_id' (page_id) is the key. This mapping might be less critical
+        # if retrieval logic directly uses page_ids from Pinecone metadata.
+        # However, RAG_SYSTEM_OVERVIEW.md refers to 'index_mapping.json' for mapping vector index to entry.
+        # Let's assume it can still be useful for quick lookups by original list order if needed, or adapt later.
+        index_to_entry = {i: entry for i, entry in enumerate(mapping_data_list)}
+        logger.info(f"Created index_to_entry map with {len(index_to_entry)} entries.")
+
     except FileNotFoundError:
-        logger.error(f"Fatal: Mapping file not found at {current_mapping_path}")
-        raise RuntimeError(f"Mapping file not found at {current_mapping_path}")
+        logger.error(f"Fatal: Mapping file {current_mapping_path} not found. Ensure it was downloaded or exists locally.")
+        raise
     except (json.JSONDecodeError, TypeError) as e:
-        logger.error(f"Fatal: Failed to decode or process JSON list from {current_mapping_path}: {e}", exc_info=True)
-        raise RuntimeError(f"Failed to decode or process {current_mapping_path}") from e
-    except Exception as e:
-        logger.error(f"Fatal: An unexpected error occurred loading/processing mapping from {current_mapping_path}: {e}", exc_info=True)
-        raise RuntimeError(f"Unexpected error loading/processing {current_mapping_path}") from e
+        logger.error(f"Fatal: Failed to load or parse mapping data from {current_mapping_path}: {e}", exc_info=True)
+        raise RuntimeError(f"Could not load/parse mapping data from {current_mapping_path}") from e
 
-    temp_distinct_metadata = {}
     try:
-        logger.info(f"Loading distinct metadata values from {current_metadata_path}...")
-        if current_metadata_path.exists(): # Use Path.exists()
+        # Ensure current_metadata_path is defined before trying to use it
+        if current_metadata_path is None:
+            logger.warning(f"Metadata cache path (current_metadata_path) is not set. Proceeding without it.")
+            distinct_metadata_values = {}
+        elif current_metadata_path.exists():
+            logger.info(f"Loading metadata cache from {current_metadata_path}...")
             with open(current_metadata_path, 'r') as f:
-                cache_content = json.load(f)
-                if "distinct_values" in cache_content and isinstance(cache_content["distinct_values"], dict):
-                    loaded_distinct = cache_content["distinct_values"]
-                    for key in loaded_distinct:
-                        if isinstance(loaded_distinct[key], list):
-                             temp_distinct_metadata[key] = set(loaded_distinct[key])
-                        else:
-                             temp_distinct_metadata[key] = loaded_distinct[key] 
-                    logger.info("Distinct metadata values (from 'distinct_values' key) processed and loaded.")
+                loaded_metadata_cache = json.load(f)
+                if isinstance(loaded_metadata_cache, dict) and "distinct_values" in loaded_metadata_cache:
+                    distinct_metadata_values = loaded_metadata_cache["distinct_values"]
+                    logger.info(f"Metadata cache loaded successfully. Keys: {list(distinct_metadata_values.keys())}")
                 else:
-                    logger.warning(f"'{current_metadata_path}' does not contain a 'distinct_values' dictionary. Proceeding without specific distinct values.")
+                    logger.warning(f"Metadata cache {current_metadata_path} is not in expected format (dict with 'distinct_values'). Skipping.")
+                    distinct_metadata_values = {}
         else:
-            logger.warning(f"Metadata cache file not found at {current_metadata_path}. Proceeding without it.")
+            logger.warning(f"Metadata cache file {current_metadata_path} not found. Proceeding without it.")
+            distinct_metadata_values = {}
     except Exception as e:
-        logger.error(f"Error loading metadata cache from {current_metadata_path}: {e}. Proceeding without cache.", exc_info=True)
-    distinct_metadata_values = temp_distinct_metadata
+        logger.error(f"Error loading metadata cache from {current_metadata_path if current_metadata_path else 'N/A'}: {e}", exc_info=True)
+        distinct_metadata_values = {} # Default to empty if error
 
-    temp_schema_props = None
     try:
-        logger.info(f"Loading database schema from {current_schema_path}...")
-        if current_schema_path.exists(): # Use Path.exists()
+        # Ensure current_schema_path is defined
+        if current_schema_path is None:
+            logger.warning(f"Schema path (current_schema_path) is not set. Proceeding without schema properties.")
+            schema_properties = {}
+        elif current_schema_path.exists():
+            logger.info(f"Loading database schema from {current_schema_path}...")
             with open(current_schema_path, 'r') as f:
-                loaded_schema = json.load(f) 
-                if not isinstance(loaded_schema, dict):
-                     logger.error(f"Fatal: Content of {current_schema_path} is not a JSON dictionary.")
-                     raise TypeError(f"Schema file {current_schema_path} root is not a dictionary.")
-                temp_schema_props = loaded_schema
-            logger.info("Database schema loaded.")
+                loaded_schema = json.load(f)
+                # Expecting schema to be a dict, often with a top-level "properties" key from Notion API schema calls
+                if isinstance(loaded_schema, dict):
+                    if "properties" in loaded_schema: # Common structure for Notion DB schema
+                        schema_properties = loaded_schema["properties"]
+                    else: # Assume the loaded dict itself is the properties map
+                        logger.warning(f"Schema file {current_schema_path} does not have a top-level 'properties' key. Using the whole object as schema_properties.")
+                        schema_properties = loaded_schema
+                    logger.info(f"Schema properties loaded. Keys: {list(schema_properties.keys())}")
+                else:
+                    logger.warning(f"Schema file {current_schema_path} did not load as a dictionary. Skipping.")
+                    schema_properties = {}
         else:
-            logger.warning(f"Database schema file not found at {current_schema_path}. Query analysis may be less accurate.")
-    except json.JSONDecodeError as e:
-        logger.error(f"Fatal: Error decoding JSON from {current_schema_path}: {e}", exc_info=True)
-        raise RuntimeError(f"Error decoding JSON from {current_schema_path}") from e
+            logger.warning(f"Schema file {current_schema_path} not found. Proceeding without schema properties.")
+            schema_properties = {}
     except Exception as e:
-        logger.error(f"Fatal: Error loading schema from {current_schema_path}: {e}", exc_info=True)
-        raise RuntimeError(f"Error loading schema from {current_schema_path}") from e
-    schema_properties = temp_schema_props 
-    
-    _rag_data_loaded = True 
-    logger.info("--- RAG Data Loading Complete --- ")
+        logger.error(f"Error loading schema from {current_schema_path if current_schema_path else 'N/A'}: {e}", exc_info=True)
+        schema_properties = {} # Default to empty if error
+
+    _rag_data_loaded = True
+    logger.info("--- RAG Data Loading Completed ---")
 
 def initialize_pinecone_client(pinecone_api_key: str | None, pinecone_index_name: str | None):
     """Initializes the Pinecone client and connects to the specified index."""

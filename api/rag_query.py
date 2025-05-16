@@ -305,9 +305,14 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
         # For general queries, if no semantic matches, might just lead to "No specific examples found to support an answer."
     else:
         logger.info(f"Retrieved {len(retrieved_pinecone_ids)} IDs from Pinecone search.")
-        for vector_id_str in retrieved_pinecone_ids:
-            entry_data = rag_initializer.index_to_entry.get(vector_id_str) # Access via module, keyed by string vector_id
-
+        for vector_id_str in retrieved_pinecone_ids: # vector_id_str is the page_id from Pinecone
+            entry_data = None
+            # Search for the entry in mapping_data_list using the page_id (vector_id_str)
+            for entry_in_mapping in rag_initializer.mapping_data_list:
+                if entry_in_mapping.get("page_id") == vector_id_str:
+                    entry_data = entry_in_mapping
+                    break
+            
             if entry_data:
                 content = entry_data.get("content", "")
                 title = entry_data.get("title", "Untitled Entry")
@@ -330,11 +335,11 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
                     "score": score # Using 'score' here
                 })
             else: 
-                logger.warning(f"Could not find entry data in index_to_entry for Pinecone ID: {vector_id_str}")
+                logger.warning(f"Could not find entry data in mapping_data_list for Pinecone ID: {vector_id_str}")
 
     if not exemplar_context_for_llm:
-        logger.warning("No exemplar contexts could be constructed despite retrieving Pinecone IDs (possibly all IDs failed lookup in index_to_entry).")
-        # This case might occur if index_mapping.json is out of sync with Pinecone index.
+        logger.warning("No exemplar contexts could be constructed despite retrieving Pinecone IDs (possibly all IDs failed lookup in mapping_data_list).")
+        # This case might occur if mapping_data_list is out of sync with Pinecone index.
         # Decide on a user-facing message
         answer_text = "Found some potential matches, but could not retrieve their full content for context."
         if is_how_many_times_person_query:

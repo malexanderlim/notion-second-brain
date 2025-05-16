@@ -29,6 +29,7 @@ pinecone-client>=3.0.0,<4.0.0
 # boto3 # If we were using S3 directly
 # google-cloud-storage # If we were using GCS directly
 # azure-storage-blob # If we were using Azure Blob directly
+google-cloud-storage # For Google Cloud Storage
 
 # Testing & Dev
 # pytest

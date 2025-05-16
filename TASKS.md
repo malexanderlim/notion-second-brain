@@ -32,6 +32,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
   - [x] Create `storage/json_storage.py` module
   - [x] Implement `generate_filename` for time periods
   - [x] Implement `save_entries_to_json` function
+  - [x] Implement sequential monthly JSON export to Google Cloud Storage
 - [x] **3.1 Command Line Interface (Basic)**
   - [x] Create `cli.py` module in root
   - [x] Implement argument parsing (`argparse`) for basic options (period, dates, output, test, verbose)
@@ -74,13 +75,15 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 - [x] **Setup & Dependencies:**
   - [x] Add `openai`, `faiss-cpu` to `requirements.txt`
   - [x] Add `OPENAI_API_KEY` to `.env.example` (User must add to `.env`)
+  - [x] Add `google-cloud-storage` to `requirements.txt`
 - [x] **Offline Indexing (`build_index.py`):**
   - [x] Create `build_index.py` script skeleton
-  - [x] Load entries from JSON export
+  - [x] Load entries from JSON export (from local files, then adapted for GCS)
+  - [x] Load exported JSON data from GCS for indexing
   - [x] Implement OpenAI embedding for entry content
-  - [x] Implement FAISS index creation (`IndexFlatL2`)
-  - [x] Create and save index-to-entry mapping file (`index_mapping.json`)
-  - [x] Save FAISS index (`index.faiss`)
+  - [x] Integrate with Pinecone for vector storage
+  - [x] Create and save index-to-entry mapping file (`index_mapping.json`) to GCS
+  - [x] Upload index artifacts (schema, mapping, metadata cache, last update timestamp) to GCS
 - [x] **CLI Query Handling (`cli.py`):**
   - [x] Add `--query` argument to `argparse`
   - [x] Add logic to `main()` to handle `--query` mode
@@ -108,13 +111,13 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
       - [x] During initial full batched export/index:
         - [x] Track max `last_edited_time` from each processed batch.
         - [x] Determine overall max `last_edited_time` across all batches.
-        - [x] Store this overall max `last_edited_time` (e.g., in `last_entry_update_timestamp.txt` or KV store).
+        - [x] Store this overall max `last_edited_time` in `last_entry_update_timestamp.txt` (on GCS).
       - [x] During incremental sync:
         - [x] Track max `last_edited_time` from the current incremental batch of entries.
         - [x] Update the stored overall max `last_edited_time` if the current batch's max is newer.
     - [x] **Backend API (`backend/main.py` or similar):**
       - [x] Create a new endpoint (e.g., `/api/sync-status` or `/api/last-updated`) to securely retrieve the stored "Last Processed Entry Timestamp".
-      - [x] Ensure the endpoint reads from the correct storage location (file or KV store).
+      - [x] Ensure the endpoint reads from the GCS location.
     - [x] **Frontend (`frontend/src/App.tsx`):**
       - [x] Fetch the "Last Processed Entry Timestamp" from the new backend endpoint.
       - [x] Display this timestamp in a user-friendly format (e.g., "Last Updated: January 21, 2025").
@@ -147,7 +150,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
     - [x] Choose & setup backend framework (Flask/FastAPI) in `backend/` directory.
     - [x] Define `/api/query` POST endpoint structure.
     - [x] Refactor RAG query logic from `cli.py` into a reusable function in `backend/rag_query.py` (or similar).
-    - [x] Implement index/mapping loading in the backend function.
+    - [x] Implement index/mapping/schema/metadata loading from GCS in the backend function.
     - [x] Implement query embedding, FAISS search, context retrieval logic in the backend function.
     - [x] Implement LLM call and response parsing in the backend function.
     - [x] Implement extraction of source document titles and URLs.
@@ -273,7 +276,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
   - [ ] **Query Processing:**
     - [ ] Implement query decomposition for complex questions involving multiple parts or constraints.
     - [ ] Enhance query safety check (e.g., more nuanced topic detection, stricter default behavior on error).
-  - [ ] **Vector DB:** Evaluate migrating from local FAISS to a managed vector database (Pinecone, Weaviate, ChromaDB, etc.) for scalability and easier management, especially if syncing becomes frequent.
+  - [x] **Vector DB:** Migrated from local FAISS to Pinecone, with index artifacts (mapping, metadata, schema, last update) stored in Google Cloud Storage.
   - [ ] **Cost Management:** Implement token usage tracking and estimated cost calculation per query, potentially displaying it in the UI.
   - [ ] **Configuration:** Move more hardcoded values (models, paths, `TOP_K`, prompts) to a configuration file or environment variables.
 
@@ -409,10 +412,12 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 - `.cursor/rules/task-list.mdc` - Cursor rule for task management ✅
 - `notion_second_brain/processing/transformers.py` - Transforms raw Notion data to simpler format ✅
 - `design/MVP_RAG_TDD.md` - Technical design for RAG MVP ✅
-- `build_index.py` - (New) Script to create FAISS index ⏳ (Needs creation)
+- `build_index.py` - Script to process GCS JSONs, embed, and upsert to Pinecone; manages artifacts on GCS ✅
 - `index.faiss` - (Generated) FAISS index file ⏳
-- `index_mapping.json` - (Generated) Index mapping file ⏳
-- `metadata_cache.json` - (Generated) Cache for distinct metadata values ✅
+- `index_mapping.json` - (Generated on GCS) Index mapping file ✅
+- `metadata_cache.json` - (Generated on GCS) Cache for distinct metadata values ✅
+- `last_entry_update_timestamp.txt` - (Generated on GCS) Timestamp of last processed entry ✅
+- `schema.json` - (Generated on GCS) Database schema file ✅
 - `TECHNICAL_LEARNINGS.md` - Summary of RAG development insights ✅
 - `design/WEB_UI_TDD.md` - Technical design for Web UI MVP ✅
 
@@ -427,7 +432,7 @@ Tracking progress for the initial MVP RAG Demo and subsequent full index build.
 As the project grows, detailed task lists for major features or initiatives will be maintained in separate files within the `tasks/` directory to keep this main `TASKS.md` file concise and focused on overall progress and smaller, more general tasks.
 
 *   **Vercel Deployment:** See [`tasks/VERCEL_DEPLOYMENT_TASKS.md`](tasks/VERCEL_DEPLOYMENT_TASKS.md) for the detailed plan and tasks related to deploying the application to Vercel.
-*   **Pinecone Integration:** See [`tasks/PINECONE_INTEGRATION_TASKS.md`](tasks/PINECONE_INTEGRATION_TASKS.md) for tasks related to migrating from FAISS to Pinecone.
+*   **Pinecone Integration:** See [`tasks/PINECONE_INTEGRATION_TASKS.md`](tasks/PINECONE_INTEGRATION_TASKS.md) for tasks related to migrating from FAISS to Pinecone. (Note: GCS now stores artifacts for Pinecone).
 
 ## Refactor cli.py for Enhanced Modularity and Maintainability
 

@@ -24,6 +24,11 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 
+# Google Cloud Storage settings
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
+GCS_EXPORT_PREFIX = os.getenv("GCS_EXPORT_PREFIX", "notion_exports") # Default prefix for exports
+GCS_INDEX_ARTIFACTS_PREFIX = os.getenv("GCS_INDEX_ARTIFACTS_PREFIX", "index_artifacts") # Default prefix for index artifacts
+
 # --- Logging Configuration ---
 DEFAULT_LOG_FORMAT = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
 

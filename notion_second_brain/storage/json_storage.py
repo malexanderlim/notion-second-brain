@@ -3,54 +3,49 @@ import os
 import logging
 from datetime import date, datetime
 from typing import List, Dict, Any
+from google.cloud import storage # Added for GCS
 
 logger = logging.getLogger(__name__)
 
-def save_entries_to_json(
-    entries: List[Dict[str, Any]], 
-    filename: str, 
-    output_dir: str = 'output', 
+def save_entries_to_gcs(
+    entries: List[Dict[str, Any]],
+    gcs_bucket_name: str,
+    gcs_blob_name: str, # Full path in the bucket, e.g., "exports/2023-10.json"
     metadata: Dict[str, Any] | None = None
 ) -> str | None:
-    """Saves a list of journal entries to a JSON file.
+    """Saves a list of journal entries to a JSON file in Google Cloud Storage.
 
     Args:
         entries: The list of entry dictionaries to save.
-        filename: The desired name for the JSON file (e.g., '2023-10-26.json').
-        output_dir: The directory where the JSON file should be saved. Defaults to 'output'.
+        gcs_bucket_name: The GCS bucket name.
+        gcs_blob_name: The full path/name for the blob in the GCS bucket.
         metadata: Optional dictionary with metadata to include at the top level of the JSON file.
 
     Returns:
-        The full path to the saved file, or None if an error occurred.
+        The GCS URI (gs://bucket_name/blob_name) of the saved file, or None if an error occurred.
     """
-    if not filename.endswith('.json'):
-        filename += '.json'
-
-    output_path = os.path.join(output_dir, filename)
+    if not gcs_blob_name.endswith('.json'):
+        gcs_blob_name += '.json'
 
     try:
-        # Ensure the output directory exists
-        os.makedirs(output_dir, exist_ok=True)
+        storage_client = storage.Client()
+        bucket = storage_client.bucket(gcs_bucket_name)
+        blob = bucket.blob(gcs_blob_name)
 
-        # Prepare data structure, optionally including metadata
         data_to_save = {}
         if metadata:
             data_to_save['metadata'] = metadata
         data_to_save['entries'] = entries
 
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=4, default=str) # Use default=str for non-serializable types like datetime
+        json_data = json.dumps(data_to_save, ensure_ascii=False, indent=4, default=str)
         
-        logger.info(f"Successfully saved {len(entries)} entries to {output_path}")
-        return output_path
-    except IOError as e:
-        logger.error(f"Error writing to JSON file {output_path}: {e}")
-        return None
-    except TypeError as e:
-        logger.error(f"Error serializing data to JSON for {output_path}: {e}. Check for non-serializable types.")
-        return None
-    except Exception as e:
-        logger.error(f"An unexpected error occurred while saving to {output_path}: {e}")
+        blob.upload_from_string(json_data, content_type='application/json')
+        
+        gcs_uri = f"gs://{gcs_bucket_name}/{gcs_blob_name}"
+        logger.info(f"Successfully saved {len(entries)} entries to {gcs_uri}")
+        return gcs_uri
+    except Exception as e: # Catching a broader exception for GCS operations
+        logger.error(f"Error writing to GCS (gs://{gcs_bucket_name}/{gcs_blob_name}): {e}", exc_info=True)
         return None
 
 def generate_filename(period: str, dt: date | None = None, year: int | None = None) -> str:

@@ -8,41 +8,43 @@ The system connects to a Notion database, extracts journal entries, processes th
 
 ```mermaid
 graph TD
-    A[Notion Database] --> B(Data Export via cli.py);
-    B --> C{JSON Files per Month};
-    C --> D[Indexing Process via build_index.py];
-    D --> E[FAISS Vector Index (index.faiss)];
-    D --> F[Entry Mapping (index_mapping.json)];
-    D --> G[Metadata Cache (metadata_cache.json)];
+    A[Notion Database] --> B(Data Export via cli.py to GCS);
+    B --> C{JSON Files per Month (on GCS)};
+    C --> D[Indexing Process via build_index.py (uses GCS data, targets Pinecone & GCS for artifacts)];
+    D -- Upserts vectors --> Pinecone_DB[Pinecone Vector DB];
+    D -- Saves artifact --> F[Entry Mapping (index_mapping.json on GCS)];
+    D -- Saves artifact --> G[Metadata Cache (metadata_cache.json on GCS)];
+    D -- Saves artifact --> Schema[Schema (schema.json on GCS)];
+    D -- Saves artifact --> LastUpdated[Last Update Timestamp (last_entry_update_timestamp.txt on GCS)];
     H[User Query via Frontend UI] --> I{Backend API (FastAPI - Modular RAG Backend)};
-    I -- Uses --> E;
+    I -- Queries --> Pinecone_DB;
     I -- Uses --> F;
     I -- Uses --> G;
+    I -- Uses --> Schema;
     I -- Uses --> J[LLM Providers (OpenAI, Anthropic)];
     I --> K[Answer with Cost & Model Info to Frontend UI];
 ```
 
 **Components:**
 -   **Notion Database:** The source of journal entries.
--   **`cli.py`:** Command-line interface for setup operations (exporting data, testing connection, retrieving schema) and for initiating queries. Query execution now delegates to the core RAG logic within the `backend` module.
--   **`build_index.py`:** Script responsible for processing the exported JSON files, generating embeddings for entry content, creating a FAISS vector index, an index-to-entry mapping file, and a cache of distinct metadata values.
-    -   `index.faiss`: The FAISS vector store containing embeddings of journal entry content.
-    -   `index_mapping.json`: A JSON file mapping each vector index in FAISS back to its corresponding journal entry's metadata and content. Includes `page_id`, `title`, `entry_date`, full `content`, and extracted metadata like `Family`, `Friends`, `Tags`.
-    -   `metadata_cache.json`: Stores unique values for filterable metadata fields (e.g., all unique names in 'Family', all unique tags in 'Tags') to aid query analysis.
-    -   `schema.json`: A representation of the Notion database schema, detailing property names and types.
-    -   `last_entry_update_timestamp.txt`: A text file storing the ISO timestamp of the most recently processed entry during the last successful run of `build_index.py`. This is used by the frontend to display when the data was last synced.
+-   **`cli.py`:** Command-line interface for setup operations (exporting data as monthly JSONs to Google Cloud Storage under `GCS_EXPORT_PREFIX`, testing connection, retrieving and uploading `schema.json` to GCS) and for initiating queries. Query execution now delegates to the core RAG logic within the `backend` module.
+-   **`build_index.py`:** Script responsible for processing the exported JSON files (from GCS), generating embeddings for entry content, upserting vectors to Pinecone, and creating/uploading several artifacts to Google Cloud Storage under `GCS_INDEX_ARTIFACTS_PREFIX`.
+    -   `index_mapping.json`: (On GCS) A JSON file mapping each entry (identified by `page_id`) to its corresponding journal entry's metadata and full content. Includes `page_id`, `title`, `entry_date`, `content`, and extracted metadata like `Family`, `Friends`, `Tags`. This is used by the backend to retrieve context for the LLM.
+    -   `metadata_cache.json`: (On GCS) Stores unique values for filterable metadata fields (e.g., all unique names in 'Family', all unique tags in 'Tags') to aid query analysis.
+    -   `schema.json`: (On GCS) A representation of the Notion database schema, detailing property names and types. Uploaded by `cli.py --schema` and used by `build_index.py` and the backend.
+    -   `last_entry_update_timestamp.txt`: (On GCS) A text file storing the ISO timestamp of the most recently processed entry during the last successful run of `build_index.py`. This is used by the frontend to display when the data was last synced.
 -   **Backend API (`backend/`):**
     -   **Entry Point (`backend/main.py`):** FastAPI application handling HTTP requests, responses, CORS, and basic API structure. Initializes shared RAG state via `rag_initializer` on startup.
-    -   **RAG Orchestrator (`backend/rag_query.py`):** Contains the main `perform_rag_query` function which orchestrates the entire RAG pipeline by calling specialized modules. Accesses shared state (clients, index, data) dynamically from `rag_initializer`. Includes `execute_rag_query_sync` wrapper for CLI use.
-    -   **Shared State Manager (`backend/rag_initializer.py`):** Loads and holds shared components (FAISS index, mappings, metadata, schema, LLM clients) as module globals. Provides functions for initialization, accessed by entry points and other modules.
-    -   **Query Analyzer (`backend/query_analyzer.py`):** Handles LLM calls to analyze the user query and extract structured filters (date ranges, metadata).
-    -   **Retrieval Logic (`backend/retrieval_logic.py`):** Handles embedding generation, FAISS searching, and applying metadata filters (including fallback logic).
+    -   **RAG Orchestrator (`backend/rag_query.py`):** Contains the main `perform_rag_query` function which orchestrates the entire RAG pipeline by calling specialized modules. Accesses shared state (clients, Pinecone index, data from GCS) dynamically from `rag_initializer`. Includes `execute_rag_query_sync` wrapper for CLI use.
+    -   **Shared State Manager (`backend/rag_initializer.py`):** Loads and holds shared components (Pinecone index client, mappings from GCS, metadata from GCS, schema from GCS, LLM clients) as module globals. Provides functions for initialization, accessed by entry points and other modules.
+    -   **Query Analyzer (`backend/query_analyzer.py`):** Handles LLM calls to analyze the user query and extract structured filters (date ranges, metadata), using schema and distinct values loaded from GCS.
+    -   **Retrieval Logic (`backend/retrieval_logic.py`):** Handles embedding generation, Pinecone searching (vector search + metadata filtering), and applying metadata filter fallbacks.
     -   **LLM Interface (`backend/llm_interface.py`):** Handles interaction with different LLM providers (OpenAI, Anthropic) for final answer generation.
     -   **Prompt Constructor (`backend/prompt_constructor.py`):** Assembles the final prompts for the LLM based on context, query type, and fallback status.
     -   **Cost Utility (`backend/cost_utils.py`):** Calculates estimated query cost based on token usage across different steps.
     -   **Configuration (`backend/rag_config.py`):** Defines constants, file paths, default models, and the `MODEL_CONFIG` dictionary (model properties, providers, pricing).
     -   Provides an endpoint (e.g., `/api/query`) to receive user queries, including an optional `model_name` for selecting the LLM.
-    -   Provides an endpoint (`/api/last-updated`) to retrieve the timestamp from `last_entry_update_timestamp.txt`.
+    -   Provides an endpoint (`/api/last-updated`) to retrieve the timestamp from `last_entry_update_timestamp.txt` (stored on GCS).
 -   **LLM Providers (OpenAI, Anthropic):** Used for generating text embeddings (e.g., OpenAI's `text-embedding-ada-002`) and for powering Large Language Model (LLM) calls (e.g., OpenAI's `gpt-4o`, `gpt-4o-mini`, Anthropic's `claude-3-5-haiku-20241022`) for query analysis and final answer generation.
 -   **Frontend UI (`frontend/src/App.tsx`):**
     -   React/Vite/TypeScript application.
@@ -51,27 +53,29 @@ graph TD
 
 ## 2. Indexing Process (`build_index.py`)
 
-1.  **Load Data:** Reads journal entries from JSON files previously exported by `cli.py --export-month YYYY-MM`. Can process multiple monthly files incrementally.
+1.  **Load Data:** Reads journal entries from JSON files previously exported by `cli.py --export-month YYYY-MM` (or `cli.py --export`). These JSON files are read from Google Cloud Storage (GCS) from the configured `GCS_EXPORT_PREFIX`. Can process multiple monthly files incrementally.
 2.  **Content Preparation:** For each entry, relevant text content is extracted and combined.
 3.  **Embedding Generation:** The combined text content of each entry is sent to the OpenAI API (using a model specified in `MODEL_CONFIG`, e.g., `text-embedding-ada-002`) to generate a vector embedding. Batch embedding requests are used for efficiency.
-4.  **FAISS Index Creation:**
-    -   A FAISS index (typically `IndexFlatL2`) is created.
-    -   Embeddings from all entries are added to this index.
-    -   The index is saved to `index.faiss`.
+4.  **Pinecone Vector Upsert:**
+    -   For each entry with valid content and an embedding, a vector is prepared for Pinecone.
+    -   The `page_id` of the entry is used as the unique ID for the vector in Pinecone.
+    -   Key metadata (e.g., `title`, `entry_date`, `tags`) is included with the vector for filtering capabilities within Pinecone.
+    -   Vectors are upserted to the configured Pinecone index in batches for efficiency.
+    -   No local `.faiss` index file is created or saved.
 5.  **Index-to-Entry Mapping (`index_mapping.json`):**
-    -   A list of dictionaries is created. Each dictionary corresponds to an entry in the FAISS index (by its numerical index/order).
-    -   Each dictionary stores: `page_id`, `title`, `entry_date` (as "YYYY-MM-DD" string), original `content`, extracted metadata fields (e.g., `Family`, `Friends`, `Tags` as lists of strings), and the `faiss_index` itself.
-    -   This mapping is saved to `index_mapping.json`.
+    -   A list of dictionaries is created. Each dictionary contains the full data (including `page_id`, `title`, `entry_date`, original `content`, and all extracted metadata) for every entry that was processed and whose vector was upserted (or intended for upsert) to Pinecone.
+    -   This mapping is crucial for the backend to retrieve the full context of entries whose `page_id`s are returned by a Pinecone search.
+    -   This mapping is saved as `index_mapping.json` to GCS under `GCS_INDEX_ARTIFACTS_PREFIX`.
 6.  **Metadata Cache (`metadata_cache.json`):**
-    -   Iterates through all entries in `index_mapping.json`.
+    -   Iterates through all entries in the (final) `index_mapping.json` data.
     -   Extracts unique string values for key filterable list/multi-select fields (e.g., `Family`, `Friends`, `Tags`).
-    -   Stores these efficiently (e.g., dictionary of sets, then saved as lists in JSON) in `metadata_cache.json`. This helps the query analysis LLM map query terms to known metadata values.
-7.  **Schema (`schema.json`):** While not directly created by `build_index.py`, this file (expected to be present) defines the structure of the Notion DB properties and is used by the query analysis step. It should be generated or maintained based on the actual Notion DB schema.
+    -   Stores these efficiently (e.g., dictionary of sets, then saved as lists in JSON) in `metadata_cache.json` on GCS (under `GCS_INDEX_ARTIFACTS_PREFIX`). This helps the query analysis LLM map query terms to known metadata values.
+7.  **Schema (`schema.json`):** This file, typically generated by `cli.py --schema` and uploaded to GCS (under `GCS_INDEX_ARTIFACTS_PREFIX`), defines the structure of the Notion DB properties. `build_index.py` may also re-upload a local copy if present, ensuring it's available on GCS for the backend.
 8.  **Last Processed Entry Timestamp (`last_entry_update_timestamp.txt`):**
-    -   During the processing of entries (both initial and incremental), `build_index.py` tracks the `last_edited_time` of each entry.
-    -   After successfully processing all input files and saving the index and mapping, it writes the most recent `last_edited_time` encountered to `last_entry_update_timestamp.txt` as an ISO format string.
-    -   If an existing timestamp file is present and not a forced rebuild, the script ensures this file always reflects the latest entry processed across all runs.
-9.  **Incremental Updates:** The script supports loading an existing index and mapping to add new entries, allowing for checkpointing and incremental builds.
+    -   During the processing of entries, `build_index.py` tracks the `last_edited_time` of each entry.
+    -   After successfully processing all input files and saving other artifacts, it writes the most recent `last_edited_time` encountered to `last_entry_update_timestamp.txt` as an ISO format string to GCS (under `GCS_INDEX_ARTIFACTS_PREFIX`).
+    -   If an existing timestamp file is present on GCS and not a forced rebuild, the script ensures this file always reflects the latest entry processed across all runs.
+9.  **Incremental Updates:** The script supports loading an existing mapping from GCS (if not `force_rebuild`) to identify already processed `page_id`s. This allows it to primarily process and embed only new or updated entries before upserting to Pinecone and updating the artifacts on GCS.
 
 ## 3. Backend API Query Flow
 
@@ -80,9 +84,9 @@ The main orchestration happens in `backend/rag_query.py` (`perform_rag_query`), 
 ### 3.1. Request Reception & Initialization
 
 -   The FastAPI app (`main.py`) receives a POST request to `/api/query` with `{"query": "...", "model_name": "..."}`.
--   On startup, `main.py` calls functions in `rag_initializer.py` to load data (index, mapping, metadata, schema) and initialize LLM clients (OpenAI, Anthropic) based on API keys. These are stored as globals within `rag_initializer`.
+-   On startup, `main.py` calls functions in `rag_initializer.py` to load data (initialize Pinecone index client, load mapping from GCS, metadata from GCS, schema from GCS) and initialize LLM clients (OpenAI, Anthropic) based on API keys. These are stored as globals within `rag_initializer`.
 -   `rag_config.py` holds static configuration like `MODEL_CONFIG`.
--   The `/api/last-updated` endpoint reads `last_entry_update_timestamp.txt`.
+-   The `/api/last-updated` endpoint reads `last_entry_update_timestamp.txt` from GCS.
 
 ### 3.2. Query Analysis (`query_analyzer.py`)
 
@@ -106,13 +110,13 @@ The main orchestration happens in `backend/rag_query.py` (`perform_rag_query`), 
 
 -   **If Candidate Indices Exist:** Orchestrated by `rag_query.py`.
     1.  **Query Embedding:** `rag_query.py` calls `get_embedding` in `retrieval_logic.py` to get the query vector using the OpenAI client from `rag_initializer`.
-    2.  **FAISS Search:** `rag_query.py` calls `perform_faiss_search` in `retrieval_logic.py`, passing the query vector, the FAISS index (from `rag_initializer.index`), and an `IDSelectorBatch` created from the candidate indices identified in step 3.3.
--   **Output:** `perform_faiss_search` returns the top `k` FAISS indices and distances to `rag_query.py`.
+    2.  **Pinecone Search:** `rag_query.py` calls a search function in `retrieval_logic.py` (e.g., `perform_pinecone_search`). This function uses the Pinecone index client (from `rag_initializer.pinecone_index_client`) to query the index with the query vector and any metadata filters derived from pre-filtering (step 3.3).
+-   **Output:** The Pinecone search returns the top `k` matching results, typically including `page_id`s, scores, and potentially metadata, to `rag_query.py`.
 
 ### 3.5. Context Retrieval (`rag_query.py`)
 
 -   This logic remains within `rag_query.py`.
--   It uses the retrieved FAISS indices to look up the corresponding entry data (title, content, date, page_id) from `rag_initializer.index_to_entry`.
+-   It uses the retrieved `page_id`s from Pinecone to look up the corresponding entry data (title, content, date, page_id) from the `mapping_data_list` (loaded from `index_mapping.json` on GCS via `rag_initializer`).
 -   It constructs context strings for the LLM and prepares the `sources` list for the final response, generating Notion URLs from `page_id`s.
 
 ### 3.6. Final Answer Generation (LLM - `llm_interface.py`)
