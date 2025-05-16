@@ -7,7 +7,8 @@ import logging # Import logging
 import sys # Added for stderr
 from dotenv import load_dotenv
 from datetime import datetime, timezone # Added timezone
-from contextlib import asynccontextmanager # UNCOMMENTED
+# Comment out asynccontextmanager as lifespan is not being used
+# from contextlib import asynccontextmanager 
 
 # --- Load Environment Variables First ---
 load_dotenv()
@@ -59,59 +60,11 @@ from .rag_initializer import (
     LLMClientNotInitializedError
 )
 
-# --- FastAPI Lifespan Manager for Startup/Shutdown --- UNCOMMENTED BLOCK
-@asynccontextmanager
-async def lifespan(app_instance: FastAPI): # Renamed 'app' to 'app_instance' to avoid conflict
-    logger.critical("LIFESPAN FUNCTION ENTERED!") # CRITICAL diagnostic log
-    # Code here runs on startup
-    logger.info("Application startup: Initializing RAG system and LLM clients via lifespan...")
-    
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
-    PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
-
-    openai_key_snippet = f"'{OPENAI_API_KEY[:5]}...'" if OPENAI_API_KEY else "None"
-    anthropic_key_snippet = f"'{ANTHROPIC_API_KEY[:5]}...'" if ANTHROPIC_API_KEY else "None"
-    pinecone_key_snippet = f"'{PINECONE_API_KEY[:5]}...'" if PINECONE_API_KEY else "None"
-
-    logger.info(f"Lifespan: Attempting to initialize with OPENAI_API_KEY: {openai_key_snippet}")
-    logger.info(f"Lifespan: Attempting to initialize with ANTHROPIC_API_KEY: {anthropic_key_snippet}")
-    logger.info(f"Lifespan: Attempting to initialize with PINECONE_API_KEY: {pinecone_key_snippet}, Index: {PINECONE_INDEX_NAME}")
-
-    try:
-        logger.info("Lifespan: Loading RAG data...")
-        load_rag_data() # Depends on GCS creds being set up before lifespan starts
-        logger.info("Lifespan: RAG data loading attempted.")
-        
-        logger.info("Lifespan: Initializing OpenAI client...")
-        initialize_openai_client(OPENAI_API_KEY)
-        logger.info("Lifespan: OpenAI client initialization attempted.")
-        
-        # Optional: Verify OpenAI client immediately within lifespan for focused debugging
-        if get_openai_client():
-            logger.info("Lifespan: OpenAI client GETTER returned a client after init.")
-        else:
-            logger.error("Lifespan: OpenAI client GETTER returned None after init call.")
-
-        logger.info("Lifespan: Initializing Anthropic client...")
-        initialize_anthropic_client(ANTHROPIC_API_KEY)
-        logger.info("Lifespan: Anthropic client initialization attempted.")
-
-        logger.info("Lifespan: Initializing Pinecone client...")
-        initialize_pinecone_client(PINECONE_API_KEY, PINECONE_INDEX_NAME)
-        logger.info("Lifespan: Pinecone client initialization attempted.")
-        
-        logger.info("Application startup: RAG system and LLM clients initialization sequence completed via lifespan.")
-    except Exception as e:
-        logger.critical(f"Application startup (via lifespan): Failed to initialize RAG system or LLM clients: {e}", exc_info=True)
-        # Optionally, re-raise or handle to prevent app from starting in a bad state
-        # raise SystemExit(f"Failed to initialize critical components: {e}") from e
-    
-    yield
-    
-    # Code here runs on shutdown (optional)
-    logger.info("Application shutdown (via lifespan): Cleaning up resources (if any)...")
+# --- FastAPI Lifespan Manager for Startup/Shutdown --- COMMENTED OUT BLOCK
+# @asynccontextmanager
+# async def lifespan(app_instance: FastAPI): 
+#     logger.critical("LIFESPAN FUNCTION ENTERED!") 
+#     # ... (rest of lifespan code that was here) ...
 # --- End FastAPI Lifespan Manager ---
 
 # --- FastAPI App Instance with Lifespan Manager ---
@@ -120,8 +73,8 @@ try:
     app = FastAPI(
         title="Notion Second Brain API",
         description="API for querying the Notion Second Brain RAG index.",
-        version="0.1.0",
-        lifespan=lifespan # ADDED BACK
+        version="0.1.0"
+        # lifespan=lifespan # REMOVED lifespan argument
     )
     logger.info("API_MAIN: FastAPI app instantiated successfully.")
 except Exception as e_app_create:
@@ -292,3 +245,48 @@ async def transcribe_audio(file: UploadFile = File(...)):
 
 # Remove placeholder asyncio import if no longer needed
 # import asyncio 
+
+# --- Direct Initialization (Workaround for Vercel) --- UNCOMMENTED BLOCK
+logger.info("API_MAIN: Attempting direct initialization of RAG system and LLM clients...")
+try:
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+    PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
+
+    openai_key_snippet = f"'{OPENAI_API_KEY[:5]}...'" if OPENAI_API_KEY else "None"
+    anthropic_key_snippet = f"'{ANTHROPIC_API_KEY[:5]}...'" if ANTHROPIC_API_KEY else "None"
+    pinecone_key_snippet = f"'{PINECONE_API_KEY[:5]}...'" if PINECONE_API_KEY else "None"
+
+    logger.info(f"Direct Init: OPENAI_API_KEY: {openai_key_snippet}")
+    logger.info(f"Direct Init: ANTHROPIC_API_KEY: {anthropic_key_snippet}")
+    logger.info(f"Direct Init: PINECONE_API_KEY: {pinecone_key_snippet}, Index: {PINECONE_INDEX_NAME}")
+
+    logger.info("Direct Init: Loading RAG data...")
+    load_rag_data() # Depends on GCS creds being set up
+    logger.info("Direct Init: RAG data loading attempted.")
+
+    logger.info("Direct Init: Initializing OpenAI client...")
+    initialize_openai_client(OPENAI_API_KEY)
+    logger.info("Direct Init: OpenAI client initialization attempted.")
+    
+    # Verify OpenAI client immediately
+    if get_openai_client():
+        logger.info("Direct Init: OpenAI client GETTER returned a client.")
+    else:
+        logger.error("Direct Init: OpenAI client GETTER returned None after initialization call.")
+
+
+    logger.info("Direct Init: Initializing Anthropic client...")
+    initialize_anthropic_client(ANTHROPIC_API_KEY)
+    logger.info("Direct Init: Anthropic client initialization attempted.")
+
+    logger.info("Direct Init: Initializing Pinecone client...")
+    initialize_pinecone_client(PINECONE_API_KEY, PINECONE_INDEX_NAME)
+    logger.info("Direct Init: Pinecone client initialization attempted.")
+    
+    logger.info("API_MAIN: Direct initialization sequence completed.")
+
+except Exception as e_direct_init:
+    logger.critical(f"API_MAIN: CRITICAL FAILURE during direct initialization: {e_direct_init}", exc_info=True)
+# --- End Direct Initialization ---
