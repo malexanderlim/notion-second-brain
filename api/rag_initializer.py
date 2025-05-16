@@ -159,7 +159,7 @@ def load_rag_data():
             MAPPING_FILENAME: {"critical": True, "target_path_var": "current_mapping_path"},
             METADATA_FILENAME: {"critical": False, "target_path_var": "current_metadata_path"},
             SCHEMA_FILENAME: {"critical": False, "target_path_var": "current_schema_path"},
-            LAST_SYNC_TIMESTAMP_FILENAME: {"critical": False, "target_path_var": "current_timestamp_path"} # ADDED
+            LAST_SYNC_TIMESTAMP_FILENAME: {"critical": False, "target_path_var": "current_timestamp_path", "is_timestamp": True} # ADDED is_timestamp flag
         }
 
         for filename, config_item in files_config.items():
@@ -175,28 +175,31 @@ def load_rag_data():
 
             if download_successful:
                 logger.info(f"Successfully downloaded '{filename}' from GCS to '{local_tmp_path}'.")
-                # Assign the successful download path to the correct variable
-                if config_item["target_path_var"] == "current_mapping_path":
+                if config_item.get("is_timestamp"): # MODIFIED to check flag
+                    try:
+                        with open(local_tmp_path, 'r', encoding='utf-8') as ts_file:
+                            global _last_sync_timestamp_content # Ensure we're assigning to global
+                            _last_sync_timestamp_content = ts_file.read().strip()
+                        if _last_sync_timestamp_content:
+                            logger.info(f"Successfully read timestamp content from {local_tmp_path}: '{_last_sync_timestamp_content}'")
+                        else:
+                            logger.warning(f"Timestamp file {local_tmp_path} was downloaded but is empty.")
+                            _last_sync_timestamp_content = None # Ensure it's None if empty
+                    except Exception as e_read_ts:
+                        logger.error(f"Error reading downloaded timestamp file {local_tmp_path}: {e_read_ts}", exc_info=True)
+                        _last_sync_timestamp_content = None # Ensure it's None on error
+                elif config_item["target_path_var"] == "current_mapping_path":
                     current_mapping_path = local_tmp_path
                 elif config_item["target_path_var"] == "current_metadata_path":
                     current_metadata_path = local_tmp_path
                 elif config_item["target_path_var"] == "current_schema_path":
                     current_schema_path = local_tmp_path
-                elif config_item["target_path_var"] == "current_timestamp_path": # ADDED BLOCK
-                    # This is the timestamp file, read its content
-                    try:
-                        with open(local_tmp_path, 'r', encoding='utf-8') as ts_file:
-                            _last_sync_timestamp_content = ts_file.read().strip()
-                        logger.info(f"Successfully read timestamp content from {local_tmp_path}: '{_last_sync_timestamp_content}'")
-                        # We don't need to assign to current_timestamp_path for further processing
-                        # as its content is now in the global variable.
-                        # Optionally delete the temp file if no longer needed locally
-                        # local_tmp_path.unlink(missing_ok=True) 
-                    except Exception as e_read_ts:
-                        logger.error(f"Error reading downloaded timestamp file {local_tmp_path}: {e_read_ts}", exc_info=True)
-                        _last_sync_timestamp_content = None # Ensure it's None on error
             else:
-                if config_item["critical"]:
+                # Specific logging if the timestamp file itself failed to download
+                if config_item.get("is_timestamp"):
+                     logger.warning(f"Failed to download the timestamp file '{filename}' from GCS. Last sync time will be unknown.")
+                     _last_sync_timestamp_content = None # Ensure it's None if download failed
+                elif config_item["critical"]:
                     logger.error(f"Fatal: Failed to download critical file '{filename}' from GCS. Halting data load.")
                     raise RuntimeError(f"Failed to download critical file {filename} from GCS.")
                 else:
@@ -206,8 +209,7 @@ def load_rag_data():
                         current_metadata_path = None
                     elif config_item["target_path_var"] == "current_schema_path":
                         current_schema_path = None
-                    elif config_item["target_path_var"] == "current_timestamp_path": # ADDED
-                        _last_sync_timestamp_content = None # Ensure it's None if download failed
+                    # No need for current_timestamp_path here as _last_sync_timestamp_content is handled directly
         
     elif data_source_mode == 'local':
         local_data_base_dir = Path(os.getenv('LOCAL_DATA_PATH', '.'))
