@@ -35,6 +35,7 @@ logger = logging.getLogger("api.rag_initializer")
 MAPPING_FILENAME = "index_mapping.json"
 METADATA_FILENAME = "metadata_cache.json"
 SCHEMA_FILENAME = "schema.json"
+LAST_SYNC_TIMESTAMP_FILENAME = "last_entry_update_timestamp.txt" # ADDED
 # Note: last_entry_update_timestamp.txt is not loaded by this module directly.
 
 # --- Globals managed by this initializer module ---
@@ -51,6 +52,7 @@ schema_properties: dict | None = None
 
 # Flag to prevent redundant loading
 _rag_data_loaded = False
+_last_sync_timestamp_content: Optional[str] = None # ADDED
 
 # --- Environment Variable Dependent Names for Vercel Blob ---
 # Construct blob names using today's date from RAG_CONFIG
@@ -157,6 +159,7 @@ def load_rag_data():
             MAPPING_FILENAME: {"critical": True, "target_path_var": "current_mapping_path"},
             METADATA_FILENAME: {"critical": False, "target_path_var": "current_metadata_path"},
             SCHEMA_FILENAME: {"critical": False, "target_path_var": "current_schema_path"},
+            LAST_SYNC_TIMESTAMP_FILENAME: {"critical": False, "target_path_var": "current_timestamp_path"} # ADDED
         }
 
         for filename, config_item in files_config.items():
@@ -179,6 +182,19 @@ def load_rag_data():
                     current_metadata_path = local_tmp_path
                 elif config_item["target_path_var"] == "current_schema_path":
                     current_schema_path = local_tmp_path
+                elif config_item["target_path_var"] == "current_timestamp_path": # ADDED BLOCK
+                    # This is the timestamp file, read its content
+                    try:
+                        with open(local_tmp_path, 'r', encoding='utf-8') as ts_file:
+                            _last_sync_timestamp_content = ts_file.read().strip()
+                        logger.info(f"Successfully read timestamp content from {local_tmp_path}: '{_last_sync_timestamp_content}'")
+                        # We don't need to assign to current_timestamp_path for further processing
+                        # as its content is now in the global variable.
+                        # Optionally delete the temp file if no longer needed locally
+                        # local_tmp_path.unlink(missing_ok=True) 
+                    except Exception as e_read_ts:
+                        logger.error(f"Error reading downloaded timestamp file {local_tmp_path}: {e_read_ts}", exc_info=True)
+                        _last_sync_timestamp_content = None # Ensure it's None on error
             else:
                 if config_item["critical"]:
                     logger.error(f"Fatal: Failed to download critical file '{filename}' from GCS. Halting data load.")
@@ -190,6 +206,8 @@ def load_rag_data():
                         current_metadata_path = None
                     elif config_item["target_path_var"] == "current_schema_path":
                         current_schema_path = None
+                    elif config_item["target_path_var"] == "current_timestamp_path": # ADDED
+                        _last_sync_timestamp_content = None # Ensure it's None if download failed
         
     elif data_source_mode == 'local':
         local_data_base_dir = Path(os.getenv('LOCAL_DATA_PATH', '.'))
@@ -197,6 +215,19 @@ def load_rag_data():
         current_mapping_path = local_data_base_dir / MAPPING_FILENAME
         current_metadata_path = local_data_base_dir / METADATA_FILENAME
         current_schema_path = local_data_base_dir / SCHEMA_FILENAME
+        # For local mode, try to load timestamp file directly
+        local_timestamp_path = local_data_base_dir / LAST_SYNC_TIMESTAMP_FILENAME # ADDED
+        if local_timestamp_path.exists(): # ADDED BLOCK
+            try:
+                with open(local_timestamp_path, 'r', encoding='utf-8') as ts_file:
+                    _last_sync_timestamp_content = ts_file.read().strip()
+                logger.info(f"Successfully read local timestamp content from {local_timestamp_path}: '{_last_sync_timestamp_content}'")
+            except Exception as e_read_ts_local:
+                logger.error(f"Error reading local timestamp file {local_timestamp_path}: {e_read_ts_local}", exc_info=True)
+                _last_sync_timestamp_content = None
+        else:
+            logger.warning(f"Local timestamp file not found at {local_timestamp_path}. Last sync time will be unknown.")
+            _last_sync_timestamp_content = None
     else:
         logger.error(f"Fatal: Invalid DATA_SOURCE_MODE: '{data_source_mode}'. Must be 'local' or 'gcs'.")
         raise ValueError(f"Invalid DATA_SOURCE_MODE: {data_source_mode}")
@@ -430,6 +461,10 @@ def get_anthropic_client():
         logger.warning("get_anthropic_client() called but client is not initialized.")
     return anthropic_client
 
+def get_last_sync_timestamp() -> Optional[str]: # ADDED FUNCTION
+    """Returns the content of the last sync timestamp file, if loaded."""
+    return _last_sync_timestamp_content
+
 # Function to get the current state (optional, provides controlled access)
 def get_rag_globals() -> dict:
     """Returns a dictionary containing the current state of initialized RAG globals."""
@@ -443,5 +478,6 @@ def get_rag_globals() -> dict:
         "index_to_entry": index_to_entry,
         "distinct_metadata_values": distinct_metadata_values,
         "schema_properties": schema_properties,
-        "Anthropic": Anthropic # Return the class itself if needed elsewhere
+        "Anthropic": Anthropic, # Return the class itself if needed elsewhere
+        "last_sync_timestamp_content": _last_sync_timestamp_content
     } 

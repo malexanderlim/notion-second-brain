@@ -54,6 +54,7 @@ from .rag_initializer import (
     initialize_pinecone_client,
     get_openai_client,
     get_anthropic_client,
+    get_last_sync_timestamp,
     RAGSystemNotInitializedError,
     LLMClientNotInitializedError
 )
@@ -61,6 +62,7 @@ from .rag_initializer import (
 # --- FastAPI Lifespan Manager for Startup/Shutdown ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.critical("LIFESPAN FUNCTION ENTERED!")
     # Code here runs on startup
     logger.info("Application startup: Initializing RAG system and LLM clients...")
     
@@ -217,47 +219,25 @@ def get_last_updated_timestamp():
     """Retrieves the timestamp of the last successfully processed entry from the index build process."""
     logger.info("API_MAIN: get_last_updated_timestamp CALLED.") # New Log
     
-    data_source_mode = os.getenv('DATA_SOURCE_MODE', 'local').lower()
-    logger.info(f"API_MAIN: DATA_SOURCE_MODE is '{data_source_mode}'.") # New Log
+    # DATA_SOURCE_MODE logging is helpful but the core logic now relies on rag_initializer
+    # data_source_mode = os.getenv('DATA_SOURCE_MODE', 'local').lower()
+    # logger.info(f"API_MAIN: DATA_SOURCE_MODE is '{data_source_mode}'.")
 
-    timestamp_file_path = "last_entry_update_timestamp.txt"
-    resolved_path = os.path.abspath(timestamp_file_path) # New Log: Get absolute path
-    logger.info(f"API_MAIN: Attempting to read last updated timestamp. Relative path: '{timestamp_file_path}', Resolved absolute path: '{resolved_path}'.") # Updated Log
+    # Get timestamp from rag_initializer
+    timestamp_str = get_last_sync_timestamp() # MODIFIED
+
+    if timestamp_str is None:
+        logger.warning(f"API_MAIN: Last sync timestamp not available from rag_initializer.")
+        return LastUpdatedResponse(last_updated_timestamp=None, error="Timestamp information not available. Sync may not have run or file not found/readable.")
     
-    # Log current working directory
-    logger.info(f"API_MAIN: Current working directory: '{os.getcwd()}'.") # New Log
+    if not timestamp_str: # Check if it's an empty string
+        logger.warning(f"API_MAIN: Last sync timestamp from rag_initializer is empty.")
+        return LastUpdatedResponse(last_updated_timestamp=None, error="Timestamp information is empty.")
 
-    # Log directory listing for debugging in Vercel
-    try:
-        base_dir_list = os.listdir(os.getcwd())
-        logger.info(f"API_MAIN: Listing current directory contents: {base_dir_list[:10]}") # Log first 10 items
-        api_dir_path = os.path.join(os.getcwd(), 'api')
-        if os.path.exists(api_dir_path):
-            api_dir_list = os.listdir(api_dir_path)
-            logger.info(f"API_MAIN: Listing 'api/' directory contents: {api_dir_list[:10]}")
-    except Exception as e_list:
-        logger.warning(f"API_MAIN: Could not list directory contents: {e_list}")
-
-    if not os.path.exists(resolved_path): # Use resolved_path
-        logger.warning(f"API_MAIN: Timestamp file NOT FOUND at resolved path: {resolved_path}")
-        return LastUpdatedResponse(last_updated_timestamp=None, error="Timestamp file not found. Sync may not have run yet.")
-    
-    logger.info(f"API_MAIN: Timestamp file FOUND at resolved path: {resolved_path}") # New Log
-    try:
-        with open(resolved_path, 'r', encoding='utf-8') as f: # Use resolved_path
-            timestamp_str = f.read().strip()
-        
-        if not timestamp_str:
-            logger.warning(f"Timestamp file is empty: {resolved_path}")
-            return LastUpdatedResponse(last_updated_timestamp=None, error="Timestamp file is empty.")
-
-        # Basic validation (could be more robust, e.g., regex or parse with datetime)
-        # datetime.fromisoformat(timestamp_str) # Uncomment to validate format strictly
-        logger.info(f"Successfully retrieved timestamp: {timestamp_str}")
-        return LastUpdatedResponse(last_updated_timestamp=timestamp_str)
-    except Exception as e:
-        logger.error(f"Error reading or parsing timestamp file {resolved_path}: {e}", exc_info=True)
-        return LastUpdatedResponse(last_updated_timestamp=None, error=f"Error reading timestamp file: {str(e)}")
+    # Basic validation (could be more robust, e.g., regex or parse with datetime)
+    # datetime.fromisoformat(timestamp_str) # Uncomment to validate format strictly
+    logger.info(f"Successfully retrieved timestamp via rag_initializer: {timestamp_str}")
+    return LastUpdatedResponse(last_updated_timestamp=timestamp_str)
 
 @app.post("/api/transcribe", response_model=TranscriptionResponse, tags=["Transcription"])
 async def transcribe_audio(file: UploadFile = File(...)):
