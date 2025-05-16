@@ -262,10 +262,10 @@ try:
     logger.info(f"Direct Init: ANTHROPIC_API_KEY: {anthropic_key_snippet}")
     logger.info(f"Direct Init: PINECONE_API_KEY: {pinecone_key_snippet}, Index: {PINECONE_INDEX_NAME}")
 
-    logger.info("Direct Init: Loading RAG data...")
-    load_rag_data() # Depends on GCS creds being set up
-    logger.info("Direct Init: RAG data loading attempted.")
-
+    logger.info("Direct Init: Initializing Pinecone client...")
+    initialize_pinecone_client(PINECONE_API_KEY, PINECONE_INDEX_NAME)
+    logger.info("Direct Init: Pinecone client initialization attempted.")
+    
     logger.info("Direct Init: Initializing OpenAI client...")
     initialize_openai_client(OPENAI_API_KEY)
     logger.info("Direct Init: OpenAI client initialization attempted.")
@@ -281,9 +281,9 @@ try:
     initialize_anthropic_client(ANTHROPIC_API_KEY)
     logger.info("Direct Init: Anthropic client initialization attempted.")
 
-    logger.info("Direct Init: Initializing Pinecone client...")
-    initialize_pinecone_client(PINECONE_API_KEY, PINECONE_INDEX_NAME)
-    logger.info("Direct Init: Pinecone client initialization attempted.")
+    logger.info("Direct Init: Loading RAG data...")
+    load_rag_data() # Depends on GCS creds being set up
+    logger.info("Direct Init: RAG data loading attempted.")
     
     logger.info("API_MAIN: Direct initialization sequence completed.")
 
