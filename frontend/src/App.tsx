@@ -121,7 +121,14 @@ function App() {
 
   const MAX_RECORDING_MS = 30000; // 30 seconds maximum recording time
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000"; // Use env var or default
+  // For Vercel deployment, VITE_BACKEND_URL might not be set, or could be set to the deployment URL.
+  // We want to use relative paths for API calls when deployed to Vercel for same-domain requests.
+  // For local development, we'll use the explicit localhost URL.
+  const IS_PRODUCTION = import.meta.env.PROD; // Vite provides this, true for build, false for dev server
+
+  const backendUrl = IS_PRODUCTION 
+    ? "" // For Vercel, use relative paths (e.g., /api/query). Empty string makes `${backendUrl}/api/...` become `/api/...`
+    : import.meta.env.VITE_BACKEND_URL || "http://localhost:8000"; // Local dev uses env var or default
 
   // NEW: useEffect to fetch the last updated timestamp on mount
   useEffect(() => {

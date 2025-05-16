@@ -8,23 +8,23 @@ Provides functions for:
 import logging
 import asyncio
 import numpy as np
-import faiss # Will be needed for search logic later
 import json
 from datetime import date, timedelta
+from typing import Optional
 
 # Imports for get_embedding - to be reviewed if they are all needed here
 # or if some (like RateLimitError, APIError) are handled by a shared OpenAI client wrapper later.
 # from openai import RateLimitError, APIError # Assuming these are exceptions from the openai package
 
 # Import static configurations directly
-from backend.rag_config import (
+from .rag_config import (
     MODEL_CONFIG, 
     MAX_EMBEDDING_RETRIES, 
     EMBEDDING_RETRY_DELAY,
     OPENAI_EMBEDDING_MODEL_ID # If get_embedding's default model_key is used from here
 )
 # Import rag_initializer to access shared, stateful components like clients
-import backend.rag_initializer as rag_initializer
+from . import rag_initializer
 
 logger = logging.getLogger(__name__)
 
@@ -97,46 +97,65 @@ async def get_embedding(text: str, embedding_model_key: str, **kwargs) -> dict:
         embedding_response["error"] = f"Failed to get embedding for model {selected_embedding_config['api_id']} after all retries."
     return embedding_response
 
-# FAISS search logic will be added here later
-async def perform_faiss_search(query_embedding_np: np.ndarray,
-                               effective_k: int,
-                               faiss_index: faiss.Index,
-                               selector: faiss.IDSelector | None = None
-                               ) -> tuple[np.ndarray, np.ndarray]:
-    """Performs a FAISS search with an optional selector.
+async def perform_pinecone_search(query_embedding: list[float],
+                                  top_k: int,
+                                  filter_payload: Optional[dict] = None # For Pinecone metadata filters
+                                 ) -> tuple[list[str], dict[str, float]]:
+    """Performs a semantic search using Pinecone.
 
     Args:
-        query_embedding_np: The query embedding as a NumPy array.
-        effective_k: The number of neighbors to search for.
-        faiss_index: The loaded FAISS index object.
-        selector: An optional FAISS IDSelector to restrict the search.
+        query_embedding: The query embedding vector (list of floats).
+        top_k: The number of top results to retrieve.
+        filter_payload: Optional dictionary for Pinecone metadata filtering.
+                         Example: {"genre": "drama", "year": {"$gte": 2020}}
+                         Or for specific IDs: {"vector_id_field_name": {"$in": ["id1", "id2"]}}
+                         (The exact field name for ID filtering depends on how metadata is indexed in Pinecone)
 
     Returns:
-        A tuple containing distances and retrieved indices (both NumPy arrays).
-        Returns empty arrays if effective_k is 0 or search fails.
+        A tuple containing:
+            - A list of retrieved document string IDs.
+            - A dictionary mapping document string IDs to their similarity scores.
+        Returns empty list and dict if search fails or no results.
     """
-    if effective_k == 0:
-        logger.info("Effective K for FAISS search is 0, returning empty results.")
-        return np.array([]), np.array([[]])
+    if not rag_initializer.pinecone_index_instance:
+        logger.error("Pinecone index instance not initialized. Cannot perform search.")
+        return [], {}
+    
+    if top_k == 0:
+        logger.info("Top_k for Pinecone search is 0, returning empty results.")
+        return [], {}
 
-    logger.info(f"Performing FAISS search for {effective_k} exemplars...")
+    logger.info(f"Performing Pinecone search for top_k={top_k} results...")
+    if filter_payload:
+        logger.info(f"Using filter payload: {json.dumps(filter_payload)}")
+
     try:
-        search_params = None
-        if selector:
-            search_params = faiss.SearchParameters(); 
-            search_params.sel = selector
-            logger.debug(f"FAISS search will use IDSelectorBatch with {selector.nbits if hasattr(selector, 'nbits') else 'N/A'} bits / {selector.nt if hasattr(selector, 'nt') else 'N/A'} IDs.")
+        query_response = await asyncio.to_thread(
+            rag_initializer.pinecone_index_instance.query,
+            vector=query_embedding,
+            top_k=top_k,
+            filter=filter_payload, # Pass the filter payload here
+            include_values=False,  # We typically don't need the vector values back
+            include_metadata=False # For MVP, we fetch metadata from index_mapping.json later
+                                  # If metadata were stored in Pinecone and needed, set to True
+        )
         
-        # FAISS search is CPU-bound, can be run in a thread for async compatibility if needed,
-        # but usually fast enough not to block significantly for typical k.
-        # For now, direct call assuming it's acceptable.
-        distances, retrieved_indices = faiss_index.search(query_embedding_np, k=effective_k, params=search_params)
-        logger.info(f"FAISS search completed. Retrieved {retrieved_indices.shape[1] if retrieved_indices.size > 0 else 0} indices.")
-        return distances, retrieved_indices
+        retrieved_ids: list[str] = []
+        scores: dict[str, float] = {}
+
+        if query_response and query_response.matches:
+            for match in query_response.matches:
+                retrieved_ids.append(match.id)
+                scores[match.id] = match.score
+            logger.info(f"Pinecone search completed. Retrieved {len(retrieved_ids)} IDs.")
+        else:
+            logger.info("Pinecone search returned no matches or an empty response.")
+            
+        return retrieved_ids, scores
+
     except Exception as e:
-        logger.error(f"FAISS search failed: {e}", exc_info=True)
-        # Return empty arrays consistent with no results, error logged.
-        return np.array([]), np.array([[]]) 
+        logger.error(f"Pinecone search failed: {e}", exc_info=True)
+        return [], {}
 
 def apply_metadata_filters(mapping_data_list: list[dict],
                              filter_analysis: dict,

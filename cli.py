@@ -18,18 +18,22 @@ from notion_second_brain.notion.api import NotionClient
 # from notion_second_brain.storage import json_storage # Moved to data_exporter
 from notion_second_brain import config # To check if config loaded ok
 # from notion_second_brain.processing.transformers import transform_page_to_simple_dict # Moved to data_exporter
-from notion_second_brain.data_exporter import handle_export as run_export_action # New import
+from notion_second_brain.data_exporter import handle_export as run_export_action
+from notion_second_brain.data_exporter import create_notion_filter_for_specific_month
+from notion_second_brain.processing.transformers import transform_page_to_simple_dict # Need this for initial date scan
+from notion_second_brain.notion import api as notion_api_utils # For get_database_cached
 # from notion_second_brain.rag_pipeline import handle_query as run_query_action # Removed old import
 
 # Imports for RAG logic and initialization
-from backend.rag_query import execute_rag_query_sync as run_query_action
-from backend.rag_initializer import (
+from api.rag_query import execute_rag_query_sync as run_query_action
+from api.rag_initializer import (
     load_rag_data,
     initialize_openai_client,
-    initialize_anthropic_client
+    initialize_anthropic_client,
+    initialize_pinecone_client
 )
 # DEFAULT_FINAL_ANSWER_MODEL_KEY can be imported from rag_config if needed for help text
-from backend.rag_config import DEFAULT_FINAL_ANSWER_MODEL_KEY
+from api.rag_config import DEFAULT_FINAL_ANSWER_MODEL_KEY
 
 # --- RAG Constants --- # MOVED to rag_pipeline.py
 # INDEX_FILE = "index.faiss"
@@ -340,80 +344,219 @@ def main():
     logger.info("Initializing LLM clients...")
     initialize_openai_client(config.OPENAI_API_KEY)
     # Safely get ANTHROPIC_API_KEY, pass None if not found
-    initialize_anthropic_client(getattr(config, 'ANTHROPIC_API_KEY', None)) 
-    logger.info("LLM clients initialized (if keys were provided).")
+    initialize_anthropic_client(getattr(config, 'ANTHROPIC_API_KEY', None))
+    logger.info("Initializing Pinecone client for CLI...")
 
-    # --- Action Dispatch --- 
+    # Debug log to check config values
+    pinecone_key_from_config = getattr(config, 'PINECONE_API_KEY', None)
+    pinecone_index_from_config = getattr(config, 'PINECONE_INDEX_NAME', None)
+    logger.debug(f"CLI: Pinecone Key from config: {'SET' if pinecone_key_from_config else 'NOT SET'}")
+    logger.debug(f"CLI: Pinecone Index from config: {'SET' if pinecone_index_from_config else 'NOT SET'}")
+
+    initialize_pinecone_client(
+        pinecone_key_from_config,
+        pinecone_index_from_config
+    )
+    logger.info("LLM and Pinecone clients initialized (if keys were provided).")
+
+    # --- Notion Client Initialization ---
+    notion_client = None
+    logger.info("Initializing Notion client for requested action...")
+    try:
+        notion_client = NotionClient(token=config.NOTION_TOKEN)
+        logger.info("Notion client initialized successfully.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Notion client: {e}", exc_info=True)
+        sys.exit(1)
+
+    # Determine DB ID to use
+    db_id_to_use = config.DATABASE_ID
+    if not db_id_to_use:
+        logger.error("NOTION_DATABASE_ID is not set in .env or config.py. Cannot proceed.")
+        sys.exit(1)
+    logger.info(f"Using Notion Database ID: {db_id_to_use}")
+
+    # --- Action Handling ---
+    action_taken = False
     if args.query:
-        # Query action - uses RAG components initialized above
-        run_query_action(args) # Calls the synchronous wrapper in backend/rag_query.py
-        sys.exit(0)
-    
-    # --- Actions Requiring Notion Client ---
-    # Initialize Notion client only if needed for the specific action
-    client = None
-    db_id = None
-    if args.export or args.test_connection or args.schema:
-        logger.info("Initializing Notion client for requested action...")
-        try:
-            if not config.NOTION_TOKEN or not config.DATABASE_ID:
-                logger.error("Missing NOTION_TOKEN or DATABASE_ID in environment or .env file.")
-                sys.exit(1)
-            client = NotionClient(token=config.NOTION_TOKEN)
-            db_id = config.DATABASE_ID
-            logger.info("Notion client initialized successfully.")
-        except ValueError as e:
-            logger.error(f"Configuration error initializing Notion client: {e}")
-            sys.exit(1)
-        except Exception as e:
-            logger.error(f"Failed to initialize Notion client: {e}", exc_info=True)
-            sys.exit(1)
-    
-    # Dispatch actions requiring Notion client
-    if args.test_connection:
-        logger.info("Testing Notion connection...")
-        if client and db_id and client.test_connection(database_id=db_id): # Check client/db_id exist
-            logger.info("Notion connection successful!")
-        else:
-            logger.error(f"Notion connection failed. Check token, database ID, and client initialization.")
-            sys.exit(1)
-        sys.exit(0)
+        # Ensure RAG data and clients are loaded before querying
+        logger.info("Loading RAG data (index, mapping, cache, schema)...")
+        load_rag_data() # Loads mapping, schema, metadata cache
+        logger.info("RAG data loaded.")
+        
+        logger.info("Initializing LLM clients for query...")
+        initialize_openai_client() 
+        initialize_anthropic_client()
+        # Pinecone already initialized by load_rag_data if needed by DATA_SOURCE_MODE
+        logger.info("LLM clients initialized (if keys were provided).")
 
-    elif args.schema:
-        output_filename = "schema.json"
-        logger.info(f"Retrieving schema for database ID: {db_id} and saving to {output_filename}")
-        if not client or not db_id: # Check client/db_id exist
-             logger.error("Notion client not initialized, cannot retrieve schema.")
-             sys.exit(1)
+        logger.info(f"Executing query: '{args.query}' with model: '{args.model if args.model else 'default defined in RAG'}'")
+        run_query_action(query_text=args.query, llm_model_name_override=args.model)
+        action_taken = True
+
+    elif args.test_connection:
+        logger.info("Testing Notion API connection...")
         try:
-            schema_data = client.retrieve_database_schema(database_id=db_id)
-            if schema_data and 'properties' in schema_data:
-                properties_data = schema_data['properties']
-                with open(output_filename, 'w') as f:
-                    json.dump(properties_data, f, indent=2)
-                logger.info(f"Successfully saved database properties to {output_filename}")
-                sys.exit(0)
-            elif schema_data:
-                logger.warning("Schema retrieved but no 'properties' key found. Saving entire schema object.")
-                with open(output_filename, 'w') as f:
-                    json.dump(schema_data, f, indent=2)
-                logger.info(f"Successfully saved entire schema object to {output_filename}")
-                sys.exit(0) # Exiting successfully even if only partial schema saved
-            else:
-                 logger.error("Failed to retrieve database schema (API returned null or empty).")
-                 sys.exit(1)
+            test_db_info = notion_client.retrieve_database_schema(db_id_to_use)
+            db_title = test_db_info.get('title', [{'plain_text': '[Unknown Database]'}])[0].get('plain_text', '[Unknown Database]')
+            logger.info(f"Successfully connected to Notion. Database title: '{db_title}'")
+            logger.info(f"Full database info (first 200 chars): {str(test_db_info)[:200]}...")
         except Exception as e:
-            logger.error(f"An error occurred while retrieving or saving schema: {e}", exc_info=True)
-            sys.exit(1)
-    
-    elif args.export:
-        if not client or not db_id: # Check client/db_id exist
-             logger.error("Notion client not initialized, cannot run export.")
-             sys.exit(1)
-        run_export_action(args, client, db_id) # Pass initialized client and db_id
-        sys.exit(0)
-    
-    else:
+            logger.error(f"Notion API connection test failed: {e}", exc_info=True)
+        action_taken = True
+        
+    elif args.schema:
+        logger.info(f"Retrieving schema for database ID: {db_id_to_use}...")
+        try:
+            db_info = notion_client.retrieve_database_schema(db_id_to_use) # type: ignore
+            # exporter.save_schema_locally(db_info, "schema.json") # This was already commented
+            
+            # The problematic call below is removed.
+            # exporter.handle_schema_retrieval_and_save(config=config, db_id=db_id_to_use) # type: ignore
+
+            # Save the full schema to a local file
+            schema_filename = "schema.json"
+            with open(schema_filename, 'w') as f:
+                json.dump(db_info, f, indent=4)
+            logger.info(f"Database schema saved to {schema_filename}")
+            
+            # Also attempt to save to GCS if configured (as done by build_index.py)
+            if config.GCS_BUCKET_NAME and config.GCS_INDEX_ARTIFACTS_PREFIX:
+                from google.cloud import storage
+                try:
+                    storage_client = storage.Client()
+                    bucket = storage_client.bucket(config.GCS_BUCKET_NAME)
+                    blob_name = f"{config.GCS_INDEX_ARTIFACTS_PREFIX.rstrip('/')}/{schema_filename}"
+                    blob = bucket.blob(blob_name)
+                    blob.upload_from_filename(schema_filename)
+                    logger.info(f"Schema also uploaded to GCS: gs://{config.GCS_BUCKET_NAME}/{blob_name}")
+                except Exception as gcs_e:
+                    logger.warning(f"Failed to upload schema to GCS: {gcs_e}")
+            else:
+                logger.info("GCS bucket/prefix not configured for schema upload.")
+
+        except Exception as e:
+            logger.error(f"Failed to retrieve or save database schema: {e}", exc_info=True)
+        action_taken = True
+
+    # Default to export action if no other specific action is chosen by flags
+    # or if --export is explicitly set.
+    if args.export or not action_taken:
+        logger.info("Export action initiated.")
+        # If a specific month or period is given via args, let handle_export use that directly.
+        if args.export_month or args.period != 'all' or args.date or args.month or args.year or args.start_date:
+            logger.info("Exporting for a specific period defined by arguments.")
+            run_export_action(args, notion_client, db_id_to_use)
+        else:
+            # --- New: Export all data, month by month sequentially ---
+            logger.info("Exporting all data, month by month sequentially...")
+            try:
+                # 1. Get DB schema to know the 'Date' property name and for transform_page_to_simple_dict
+                logger.info("Fetching database schema properties...")
+                db_info_full = notion_client.retrieve_database_schema(database_id=db_id_to_use)
+                if not db_info_full:
+                    logger.error(f"Failed to retrieve database schema for {db_id_to_use}. Cannot proceed.")
+                    sys.exit(1)
+                schema_properties = db_info_full.get('properties', {})
+                
+                # Find the actual name of the 'Date' property if it's different, for now assume 'Date'
+                # This could be made more robust by looking for type 'date' in schema_properties
+                # For now, we'll assume it's literally named 'Date' as per prior logs.
+                date_property_name_in_notion = "Date" 
+                if date_property_name_in_notion not in schema_properties:
+                    logger.error(f"The assumed date property '{date_property_name_in_notion}' not found in database schema. Cannot proceed with monthly export.")
+                    logger.error(f"Available properties: {list(schema_properties.keys())}")
+                    sys.exit(1)
+                logger.info(f"Using date property '{date_property_name_in_notion}' for monthly filtering.")
+
+                # 2. Fetch all pages (minimal data) to determine the overall date range
+                logger.info("Fetching all page entries from Notion to determine date range...")
+                # Use the notion_client directly as it handles pagination
+                all_raw_pages_for_daterange = notion_client.query_database(database_id=db_id_to_use, filter_params=None)
+                
+                if not all_raw_pages_for_daterange:
+                    logger.info("No pages found in the database. Nothing to export.")
+                    sys.exit(0)
+                
+                logger.info(f"Retrieved {len(all_raw_pages_for_daterange)} raw pages for date range analysis. Processing them...")
+                
+                # Transform to simple dicts to easily access the 'entry_date'
+                # Corrected: transform_page_to_simple_dict only takes one argument: page
+                processed_for_daterange = [
+                    transform_page_to_simple_dict(page) 
+                    for page in all_raw_pages_for_daterange
+                ]
+
+                entry_dates = []
+                for entry in processed_for_daterange:
+                    date_str = entry.get('entry_date')
+                    if date_str and isinstance(date_str, str):
+                        try:
+                            entry_dates.append(date.fromisoformat(date_str))
+                        except ValueError:
+                            logger.warning(f"Could not parse date string '{date_str}' for entry_id {entry.get('page_id')} during date range scan.")
+                    elif isinstance(date_str, date): # If already a date object
+                        entry_dates.append(date_str)
+                
+                if not entry_dates:
+                    logger.info("No valid dates found in entries. Cannot determine export range.")
+                    sys.exit(0)
+
+                min_date = min(entry_dates)
+                max_date = max(entry_dates)
+                logger.info(f"Overall data range found: from {min_date.isoformat()} to {max_date.isoformat()}.")
+
+                # 3. Generate list of YYYY-MM strings for the range
+                year_months_to_export = []
+                current_loop_date = min_date
+                while current_loop_date <= max_date:
+                    year_months_to_export.append(current_loop_date.strftime("%Y-%m"))
+                    # Move to the first day of the next month to continue generating unique YYYY-MM
+                    if current_loop_date.month == 12:
+                        current_loop_date = current_loop_date.replace(year=current_loop_date.year + 1, month=1, day=1)
+                    else:
+                        current_loop_date = current_loop_date.replace(month=current_loop_date.month + 1, day=1)
+                
+                year_months_to_export = sorted(list(set(year_months_to_export))) # Ensure uniqueness and order
+
+                logger.info(f"Will export data for the following months: {year_months_to_export}")
+
+                # 4. Loop through each month and export
+                for ym_str in year_months_to_export:
+                    logger.info(f"--- Starting export for month: {ym_str} ---")
+                    
+                    # Create the specific Notion filter for this month targeting the 'Date' property
+                    # The date_property_name_in_notion was determined above
+                    notion_filter_for_month = create_notion_filter_for_specific_month(
+                        year_month_str=ym_str,
+                        date_property_name=date_property_name_in_notion 
+                    )
+
+                    if not notion_filter_for_month:
+                        logger.warning(f"Could not generate Notion filter for {ym_str}. Skipping this month.")
+                        continue
+                    
+                    current_month_date_obj = datetime.strptime(ym_str, "%Y-%m").date()
+
+                    # Call handle_export with the specific filter and period name
+                    run_export_action(
+                        args=args, # Pass original args, though filter/period are now overridden
+                        notion_client_instance=notion_client,
+                        db_id=db_id_to_use,
+                        notion_filter_override=notion_filter_for_month,
+                        period_name_override=ym_str,
+                        target_dt_for_filename_override=current_month_date_obj
+                    )
+                    logger.info(f"--- Successfully completed export for month: {ym_str} ---")
+                
+                logger.info("Completed sequential monthly export for all data.")
+
+            except Exception as e:
+                logger.error(f"Error during sequential monthly export: {e}", exc_info=True)
+                sys.exit(1)
+        action_taken = True # Mark that export action was handled
+
+    if not action_taken:
         # This path should ideally not be reached if default action logic is correct
         # and all actions are handled above.
         logger.error("No valid action specified or action could not be dispatched.")

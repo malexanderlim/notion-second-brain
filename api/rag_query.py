@@ -6,14 +6,14 @@ Provides the main `perform_rag_query` async function and a synchronous wrapper
 `execute_rag_query_sync` for CLI usage.
 Relies on shared components initialized by `rag_initializer`.
 """
-import faiss
+# import faiss # No longer needed
 import json
 import os
 import logging
 from datetime import date, datetime, timedelta
 import time
 import asyncio
-import numpy as np
+# import numpy as np # numpy might not be needed anymore if Pinecone returns lists/dicts
 import sys
 
 from openai import OpenAI, RateLimitError, APIError
@@ -24,8 +24,7 @@ except ImportError:
     APIStatusError = None
     APIConnectionError = None
 
-from backend.rag_config import (
-    INDEX_PATH,
+from .rag_config import (
     MAPPING_PATH,
     METADATA_CACHE_PATH,
     DATABASE_SCHEMA_PATH,
@@ -38,16 +37,16 @@ from backend.rag_config import (
     EMBEDDING_RETRY_DELAY
 )
 
-from backend.query_analyzer import analyze_query_for_filters
-from backend.retrieval_logic import get_embedding, perform_faiss_search, apply_metadata_filters
-from backend.prompt_constructor import construct_final_prompts
-from backend.llm_interface import generate_final_answer
-from backend.cost_utils import calculate_estimated_cost
+from .query_analyzer import analyze_query_for_filters
+from .retrieval_logic import get_embedding, perform_pinecone_search, apply_metadata_filters
+from .prompt_constructor import construct_final_prompts
+from .llm_interface import generate_final_answer
+from .cost_utils import calculate_estimated_cost
 
 # Import the rag_initializer module itself to access its globals dynamically
-import backend.rag_initializer as rag_initializer
+from . import rag_initializer
 # Functions from rag_initializer used by execute_rag_query_sync or other entry points
-from backend.rag_initializer import load_rag_data
+from .rag_initializer import load_rag_data
 
 logger = logging.getLogger(__name__)
 if not logger.handlers:
@@ -94,8 +93,10 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
     # --- Check client initialization based on provider ---
     active_client = None
     if selected_model_config["provider"] == "openai":
+        logger.info(f"RAG_QUERY: Accessing rag_initializer.openai_client. Current value: {str(rag_initializer.openai_client)[:100]}...")
         active_client = rag_initializer.openai_client # Access via module
     elif selected_model_config["provider"] == "anthropic":
+        logger.info(f"RAG_QUERY: Accessing rag_initializer.anthropic_client. Current value: {str(rag_initializer.anthropic_client)[:100]}...")
         active_client = rag_initializer.anthropic_client # Access via module
     # Add other providers here
 
@@ -187,22 +188,47 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
         return response_data
 
     # --- Semantic Search for Exemplars (using TOP_K, e.g., 15) ---
-    faiss_indices_for_exemplar_search = [e['faiss_index'] for e in current_candidates_for_metadata_count if 'faiss_index' in e]
-    if not faiss_indices_for_exemplar_search:
-        logger.warning("No FAISS indices available from metadata-filtered candidates for exemplar search.")
+    # faiss_indices_for_exemplar_search = [e['faiss_index'] for e in current_candidates_for_metadata_count if 'faiss_index' in e]
+    
+    # Get string vector IDs (e.g., page_id) from candidates for potential filtering
+    # This assumes 'vector_id' was added to entries by rag_initializer.load_rag_data or is 'page_id'
+    vector_ids_from_metadata_filter = [e.get('vector_id') or e.get('page_id') for e in current_candidates_for_metadata_count]
+    vector_ids_from_metadata_filter = [vid for vid in vector_ids_from_metadata_filter if vid is not None] # Filter out None IDs
+
+    if not vector_ids_from_metadata_filter:
+        logger.warning("No vector IDs available from metadata-filtered candidates for exemplar search.")
         answer_text = "Metadata matches found, but no content could be retrieved for examples."
         if is_how_many_times_person_query:
             answer_text = f"Based on your journal entries, there appear to be {metadata_based_interaction_count} interactions with {person_names_for_prompt}. However, no specific details could be retrieved for examples."
         response_data["answer"] = answer_text
         return response_data
 
-    unique_faiss_indices_for_exemplars = sorted(list(set(faiss_indices_for_exemplar_search)))
-    exemplar_selector = faiss.IDSelectorBatch(np.array(unique_faiss_indices_for_exemplars, dtype=np.int64))
+    # unique_faiss_indices_for_exemplars = sorted(list(set(faiss_indices_for_exemplar_search)))
+    # exemplar_selector = faiss.IDSelectorBatch(np.array(unique_faiss_indices_for_exemplars, dtype=np.int64))
+    unique_vector_ids_for_pinecone_filter = sorted(list(set(vector_ids_from_metadata_filter)))
+
+    # Construct Pinecone filter if we have specific IDs and want to restrict search to them.
+    # This assumes a metadata field like 'page_id' (or a dedicated 'vector_id') is indexed in Pinecone.
+    # For MVP, we might search broadly if this filter isn't set up in Pinecone yet, 
+    # or if build_index.py doesn't store this metadata with vectors.
+    # Let's assume 'page_id' is the field in Pinecone metadata that matches our vector IDs.
+    pinecone_filter_payload = None
+    if unique_vector_ids_for_pinecone_filter:
+        # IMPORTANT: The field name here ('page_id') MUST match what `build_index.py` uses 
+        # when it upserts vectors with metadata to Pinecone.
+        pinecone_filter_payload = {"page_id": {"$in": unique_vector_ids_for_pinecone_filter}}
+        logger.info(f"Pinecone search will be filtered for {len(unique_vector_ids_for_pinecone_filter)} specific vector IDs.")
+    else:
+        logger.info("No specific vector IDs for Pinecone filter; will perform a broader semantic search.")
+        # If unique_vector_ids_for_pinecone_filter is empty, pinecone_filter_payload remains None,
+        # leading to an unfiltered semantic search by vector similarity only.
+
     
     # Embedding uses a fixed model for now
     # Consider if embedding model choice should also be configurable
     embedding_input_tokens = 0 # Placeholder for embedding token count
     
+    logger.info(f"RAG_QUERY: Passing rag_initializer.openai_client to get_embedding. Current value: {str(rag_initializer.openai_client)[:100]}...")
     embedding_result = await get_embedding(
         text=user_query, 
         embedding_model_key=OPENAI_EMBEDDING_MODEL_ID, 
@@ -247,63 +273,79 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
         response_data["estimated_cost_usd"] = round(current_cost, 6)
         return response_data
     
-    query_embedding_np = np.array([query_embedding_vector], dtype=np.float32)
-    effective_k_exemplars = min(TOP_K, len(unique_faiss_indices_for_exemplars))
-    logger.info(f"Performing FAISS search for {effective_k_exemplars} exemplars from {len(unique_faiss_indices_for_exemplars)} candidates...")
+    # query_embedding_np = np.array([query_embedding_vector], dtype=np.float32) # Not needed for Pinecone list input
 
-    exemplar_distances, exemplar_retrieved_indices_raw = (np.array([]), np.array([[]]))
-    if effective_k_exemplars > 0:
-        exemplar_distances, exemplar_retrieved_indices_raw = await perform_faiss_search(
-            query_embedding_np=query_embedding_np,
-            effective_k=effective_k_exemplars,
-            faiss_index=rag_initializer.index, # Access via module
-            selector=exemplar_selector
-        )
-        # Error handling for FAISS search is now within perform_faiss_search,
-        # it returns empty arrays on failure, so we check the results.
-        if exemplar_retrieved_indices_raw.size == 0:
-            logger.error(f"FAISS search for exemplars returned no results or failed (handled in perform_faiss_search).")
-            # Decide if specific error message is needed or if existing logic handles it
-            if is_how_many_times_person_query:
-                answer_text = f"Based on your journal entries, there were {metadata_based_interaction_count} interactions with {person_names_for_prompt}. However, an error occurred while trying to retrieve specific examples."
-                response_data["answer"] = answer_text
-                return response_data
-            answer_text = "Error during semantic search for examples (search returned no valid indices)."
-            response_data["answer"] = answer_text
-            return response_data
+    effective_k_exemplars = TOP_K # Always ask for TOP_K, Pinecone handles filtering if payload is provided
+
+    logger.info(f"Calling Pinecone search for {effective_k_exemplars} exemplars...")
+    if pinecone_filter_payload:
+        logger.info(f"Pinecone search will use ID filter for {len(unique_vector_ids_for_pinecone_filter)} candidates: {json.dumps(pinecone_filter_payload)}")
+    else:
+        logger.info("Pinecone search will not use an ID filter (broad search).")
+
+    # --- Call Pinecone Search ---
+    retrieved_pinecone_ids, pinecone_id_to_score_map = await perform_pinecone_search(
+        query_embedding=query_embedding_vector,
+        top_k=effective_k_exemplars,
+        filter_payload=pinecone_filter_payload
+    )
 
     exemplar_context_for_llm = []
     exemplar_sources_for_response = []
-    if exemplar_retrieved_indices_raw.size > 0 and exemplar_retrieved_indices_raw[0].size > 0 and exemplar_retrieved_indices_raw[0][0] != -1:
-        for i, faiss_idx in enumerate(exemplar_retrieved_indices_raw[0]):
-            entry_data = rag_initializer.index_to_entry.get(int(faiss_idx)) # Access via module
-            if entry_data:
-                content = entry_data.get("content", ""); title = entry_data.get("title", "Untitled Entry")
-                page_id = entry_data.get("page_id")
-                url = entry_data.get("url", "")
-                if not url and page_id: url = f"https://www.notion.so/{str(page_id).replace('-', '')}"
-                
-                entry_date_obj = entry_data.get("entry_date")
-                entry_date_str = entry_date_obj.isoformat() if entry_date_obj else "Unknown date"
-                
-                exemplar_context_for_llm.append(f"Document (ID: {faiss_idx}, Title: {title}, Date: {entry_date_str}, Page ID: {page_id if page_id else 'N/A'}):\n{content}\n---")
-                
-                dist = float(exemplar_distances[0][i]) if exemplar_distances.ndim > 1 and i < exemplar_distances.shape[1] else 0.0
-                exemplar_sources_for_response.append({"title": title, "url": url, "id": str(faiss_idx), "date": entry_date_str, "distance": dist})
-            else: 
-                logger.warning(f"Could not find entry data for exemplar FAISS index: {int(faiss_idx)}")
+
+    if not retrieved_pinecone_ids:
+        logger.warning("Pinecone search for exemplars returned no IDs.")
+        # Handle case where no exemplars found after semantic search
+        if is_how_many_times_person_query:
+            answer_text = f"Based on your journal entries, there were {metadata_based_interaction_count} interactions with {person_names_for_prompt}. However, no specific examples could be retrieved via semantic search."
+            response_data["answer"] = answer_text
+            # Cost calculation for tokens used so far would go here
+            return response_data
+        # Add similar handling for tag queries if needed
+        # For general queries, if no semantic matches, might just lead to "No specific examples found to support an answer."
     else:
-        logger.warning("FAISS search for exemplars returned no results or invalid indices.")
+        logger.info(f"Retrieved {len(retrieved_pinecone_ids)} IDs from Pinecone search.")
+        for vector_id_str in retrieved_pinecone_ids: # vector_id_str is the page_id from Pinecone
+            entry_data = None
+            # Search for the entry in mapping_data_list using the page_id (vector_id_str)
+            for entry_in_mapping in rag_initializer.mapping_data_list:
+                if entry_in_mapping.get("page_id") == vector_id_str:
+                    entry_data = entry_in_mapping
+                    break
+            
+            if entry_data:
+                content = entry_data.get("content", "")
+                title = entry_data.get("title", "Untitled Entry")
+                url = entry_data.get("url", "#") # Default URL if missing
+                page_id = entry_data.get("page_id") # This should match vector_id_str if page_id is the ID
+                entry_date_obj = entry_data.get("entry_date")
+                entry_date_str = entry_date_obj.isoformat() if isinstance(entry_date_obj, date) else "Unknown date"
+                
+                context_item = f"Document (ID: {vector_id_str}, Title: {title}, Date: {entry_date_str}, Page ID: {page_id if page_id else 'N/A'}):\n{content}\n---"
+                exemplar_context_for_llm.append(context_item)
+                
+                score = pinecone_id_to_score_map.get(vector_id_str, 0.0) # Get score using string ID
+                # Pinecone scores are similarity (higher is better), FAISS L2 distances (lower is better)
+                # For consistency, we can keep it as 'score' or rename 'distance' to 'score' in SourceDocument
+                exemplar_sources_for_response.append({
+                    "title": title, 
+                    "url": url, 
+                    "id": vector_id_str, # Use the string ID from Pinecone
+                    "date": entry_date_str, 
+                    "score": score # Using 'score' here
+                })
+            else: 
+                logger.warning(f"Could not find entry data in mapping_data_list for Pinecone ID: {vector_id_str}")
 
     if not exemplar_context_for_llm:
-        answer_text = "Found metadata matches, but no specific content could be detailed for examples."
+        logger.warning("No exemplar contexts could be constructed despite retrieving Pinecone IDs (possibly all IDs failed lookup in mapping_data_list).")
+        # This case might occur if mapping_data_list is out of sync with Pinecone index.
+        # Decide on a user-facing message
+        answer_text = "Found some potential matches, but could not retrieve their full content for context."
         if is_how_many_times_person_query:
-            answer_text = f"Based on your journal entries, you interacted with {person_names_for_prompt} {metadata_based_interaction_count} times. No specific examples could be detailed."
-        elif is_how_many_times_tag_query: # New branch
-            answer_text = f"Based on your journal entries, you engaged in activities related to {tag_names_for_prompt} {metadata_based_interaction_count} times. No specific examples could be detailed."
-        
+            answer_text = f"Identified {metadata_based_interaction_count} interactions with {person_names_for_prompt}, but encountered an issue retrieving specific examples."
         response_data["answer"] = answer_text
-        response_data["sources"] = exemplar_sources_for_response # Sources might still be useful
+        # Cost calculation for tokens used so far
         return response_data
 
     exemplar_context_str = "\n\n".join(exemplar_context_for_llm)
@@ -330,6 +372,7 @@ async def perform_rag_query(user_query: str, model_name: str | None = None) -> d
     final_answer_output_tokens = 0
     llm_error_message = None
     
+    logger.info(f"RAG_QUERY: Passing clients to generate_final_answer. OpenAI: {str(rag_initializer.openai_client)[:100]}..., Anthropic: {str(rag_initializer.anthropic_client)[:100]}...")
     generated_answer, llm_input_tokens, llm_output_tokens, llm_error = await generate_final_answer(
         final_system_prompt=final_system_prompt,
         user_message_for_final_llm=user_message_for_final_llm,

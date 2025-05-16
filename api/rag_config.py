@@ -1,5 +1,5 @@
 # --- Configuration Constants ---
-INDEX_PATH = "index.faiss"
+# INDEX_PATH = "index.faiss"
 MAPPING_PATH = "index_mapping.json"
 METADATA_CACHE_PATH = "metadata_cache.json"
 DATABASE_SCHEMA_PATH = "schema.json"

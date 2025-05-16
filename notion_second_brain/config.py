@@ -1,14 +1,33 @@
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 import logging
 
+# Detailed debug for .env loading
+# print("DEBUG config.py: Attempting to find .env file...") # REMOVE
+# dotenv_path = find_dotenv(usecwd=True) # REMOVE
+# print(f"DEBUG config.py: dotenv_path found: {dotenv_path}") # REMOVE
+
 # Load environment variables from .env file if it exists
-load_dotenv()
+# load_dotenv_status = load_dotenv(dotenv_path=dotenv_path if dotenv_path else None, override=True) # REMOVE
+load_dotenv(override=True) # Simplify back, override was key
+# print(f"DEBUG config.py: load_dotenv() status: {load_dotenv_status}") # REMOVE
+
+# Check os.environ directly after load_dotenv for Pinecone keys
+# print(f"DEBUG config.py: os.environ.get('PINECONE_API_KEY'): {os.environ.get('PINECONE_API_KEY')}") # REMOVE
+# print(f"DEBUG config.py: os.environ.get('PINECONE_INDEX_NAME'): {os.environ.get('PINECONE_INDEX_NAME')}") # REMOVE
+# print(f"DEBUG config.py: os.environ.get('OPENAI_API_KEY') is set: {bool(os.environ.get('OPENAI_API_KEY'))}") # REMOVE
 
 NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("NOTION_DATABASE_ID")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
+
+# Google Cloud Storage settings
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME")
+GCS_EXPORT_PREFIX = os.getenv("GCS_EXPORT_PREFIX", "notion_exports") # Default prefix for exports
+GCS_INDEX_ARTIFACTS_PREFIX = os.getenv("GCS_INDEX_ARTIFACTS_PREFIX", "index_artifacts") # Default prefix for index artifacts
 
 # --- Logging Configuration ---
 DEFAULT_LOG_FORMAT = '%(asctime)s - %(levelname)s - %(name)s - %(message)s'
