@@ -7,6 +7,7 @@ import logging # Import logging
 import sys # Added for stderr
 from dotenv import load_dotenv
 from datetime import datetime, timezone # Added timezone
+from contextlib import asynccontextmanager # Import asynccontextmanager
 
 # --- Load Environment Variables First ---
 load_dotenv()
@@ -19,24 +20,30 @@ GCP_SERVICE_ACCOUNT_JSON_CONTENT_ENV_VAR = "GCP_SERVICE_ACCOUNT_JSON_CONTENT"
 gcp_json_string = os.getenv(GCP_SERVICE_ACCOUNT_JSON_CONTENT_ENV_VAR)
 google_creds_file_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
+# Setup logger for the main application - BEFORE any potential logging in credential handling
+# Ensure this is configured early so all logs are captured.
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(),
+                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger("api.main")
+
 if gcp_json_string and google_creds_file_path:
     try:
         # Ensure the target directory for the credentials file exists
         os.makedirs(os.path.dirname(google_creds_file_path), exist_ok=True)
         with open(google_creds_file_path, 'w') as f:
             f.write(gcp_json_string)
-        logging.info(f"Successfully wrote GCP service account credentials to {google_creds_file_path}")
+        logger.info(f"Successfully wrote GCP service account credentials to {google_creds_file_path}")
     except Exception as e:
-        logging.error(f"CRITICAL: Failed to write GCP service account credentials to {google_creds_file_path}: {e}", exc_info=True)
+        logger.error(f"CRITICAL: Failed to write GCP service account credentials to {google_creds_file_path}: {e}", exc_info=True)
         # Depending on the desired behavior, you might want to exit or raise an error here
         # For now, it logs critical and continues, but GCS operations will likely fail.
 elif not gcp_json_string:
-    logging.warning(f"GCP_SERVICE_ACCOUNT_JSON_CONTENT environment variable not set. GCS operations may fail if credentials are not found elsewhere.")
+    logger.warning(f"GCP_SERVICE_ACCOUNT_JSON_CONTENT environment variable not set. GCS operations may fail if credentials are not found elsewhere.")
 elif not google_creds_file_path:
-    logging.warning(f"GOOGLE_APPLICATION_CREDENTIALS environment variable not set to a file path. GCS operations may fail.")
+    logger.warning(f"GOOGLE_APPLICATION_CREDENTIALS environment variable not set to a file path. GCS operations may fail.")
 # --- End Vercel GCP Credentials Handling ---
 
-# --- Import RAG logic AFTER loading .env ---
+# --- Import RAG logic AFTER loading .env and setting up credentials/logging ---
 # Ensure functions needed for initialization are imported
 from .rag_query import perform_rag_query
 # Import initialization functions directly from rag_initializer
@@ -51,43 +58,51 @@ from .rag_initializer import (
     LLMClientNotInitializedError
 )
 
-# Setup logger for the main application
-logger = logging.getLogger("api.main")
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO").upper(), 
-                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+# --- FastAPI Lifespan Manager for Startup/Shutdown ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Code here runs on startup
+    logger.info("Application startup: Initializing RAG system and LLM clients...")
+    
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+    PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+    PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")
 
-# --- Initialize RAG System --- 
-# Call this early, potentially wrap in startup event
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY") # Load Pinecone API Key
-PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME") # Load Pinecone Index Name
+    openai_key_snippet = f"'{OPENAI_API_KEY[:5]}...'" if OPENAI_API_KEY else "None"
+    anthropic_key_snippet = f"'{ANTHROPIC_API_KEY[:5]}...'" if ANTHROPIC_API_KEY else "None"
+    pinecone_key_snippet = f"'{PINECONE_API_KEY[:5]}...'" if PINECONE_API_KEY else "None"
 
-# CORRECTED LOGGING:
-openai_key_snippet = f"'{OPENAI_API_KEY[:5]}...'" if OPENAI_API_KEY else "None"
-anthropic_key_snippet = f"'{ANTHROPIC_API_KEY[:5]}...'" if ANTHROPIC_API_KEY else "None"
-logger.info(f"Attempting to initialize with OPENAI_API_KEY: {openai_key_snippet}")
-logger.info(f"Attempting to initialize with ANTHROPIC_API_KEY: {anthropic_key_snippet}")
+    logger.info(f"Lifespan: Attempting to initialize with OPENAI_API_KEY: {openai_key_snippet}")
+    logger.info(f"Lifespan: Attempting to initialize with ANTHROPIC_API_KEY: {anthropic_key_snippet}")
+    logger.info(f"Lifespan: Attempting to initialize with PINECONE_API_KEY: {pinecone_key_snippet}, Index: {PINECONE_INDEX_NAME}")
 
-try:
-    logger.info("Loading RAG data...")
-    load_rag_data()
-    logger.info("Initializing OpenAI client...")
-    initialize_openai_client(OPENAI_API_KEY)
-    logger.info("Initializing Anthropic client...")
-    initialize_anthropic_client(ANTHROPIC_API_KEY)
-    logger.info("Initializing Pinecone client...")
-    initialize_pinecone_client(PINECONE_API_KEY, PINECONE_INDEX_NAME) # Pass loaded keys
-    logger.info("RAG system and LLM clients initialized successfully.")
-except Exception as e:
-    logger.critical(f"Failed to initialize RAG system or LLM clients on startup: {e}", exc_info=True)
-    # Depending on desired behavior, you might want the app to fail startup
-    # For now, it will log critical and continue, but queries will likely fail.
+    try:
+        logger.info("Lifespan: Loading RAG data...")
+        load_rag_data() # Depends on GCS creds being set up before lifespan starts
+        logger.info("Lifespan: Initializing OpenAI client...")
+        initialize_openai_client(OPENAI_API_KEY)
+        logger.info("Lifespan: Initializing Anthropic client...")
+        initialize_anthropic_client(ANTHROPIC_API_KEY)
+        logger.info("Lifespan: Initializing Pinecone client...")
+        initialize_pinecone_client(PINECONE_API_KEY, PINECONE_INDEX_NAME)
+        logger.info("Application startup: RAG system and LLM clients initialized successfully.")
+    except Exception as e:
+        logger.critical(f"Application startup: Failed to initialize RAG system or LLM clients: {e}", exc_info=True)
+        # Optionally, re-raise or handle to prevent app from starting in a bad state
+        # raise SystemExit(f"Failed to initialize critical components: {e}") from e
+    
+    yield
+    
+    # Code here runs on shutdown (optional)
+    logger.info("Application shutdown: Cleaning up resources (if any)...")
 
+# --- FastAPI App Instance with Lifespan Manager ---
 app = FastAPI(
     title="Notion Second Brain API",
     description="API for querying the Notion Second Brain RAG index.",
-    version="0.1.0"
+    version="0.1.0",
+    lifespan=lifespan # Assign the lifespan manager
 )
 
 # --- Configure CORS --- (Essential for frontend interaction)
@@ -103,7 +118,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins, # Allows specified origins
     allow_credentials=True, # Allows cookies/auth headers
-    allow_methods=["POST", "GET", "OPTIONS"], # Allow only needed methods (e.g., POST for query)
+    allow_methods=["POST", "GET", "OPTIONS"], # Allow only needed methods
     allow_headers=["Content-Type"], # Allow only necessary headers
 )
 

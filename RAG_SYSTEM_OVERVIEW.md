@@ -27,22 +27,22 @@ graph TD
 
 **Components:**
 -   **Notion Database:** The source of journal entries.
--   **`cli.py`:** Command-line interface for setup operations (exporting data as monthly JSONs to Google Cloud Storage under `GCS_EXPORT_PREFIX`, testing connection, retrieving and uploading `schema.json` to GCS) and for initiating queries. Query execution now delegates to the core RAG logic within the `backend` module.
+-   **`cli.py`:** Command-line interface for setup operations (exporting data as monthly JSONs to Google Cloud Storage under `GCS_EXPORT_PREFIX`, testing connection, retrieving and uploading `schema.json` to GCS) and for initiating queries. Query execution now delegates to the core RAG logic within the `api` module.
 -   **`build_index.py`:** Script responsible for processing the exported JSON files (from GCS), generating embeddings for entry content, upserting vectors to Pinecone, and creating/uploading several artifacts to Google Cloud Storage under `GCS_INDEX_ARTIFACTS_PREFIX`.
     -   `index_mapping.json`: (On GCS) A JSON file mapping each entry (identified by `page_id`) to its corresponding journal entry's metadata and full content. Includes `page_id`, `title`, `entry_date`, `content`, and extracted metadata like `Family`, `Friends`, `Tags`. This is used by the backend to retrieve context for the LLM.
     -   `metadata_cache.json`: (On GCS) Stores unique values for filterable metadata fields (e.g., all unique names in 'Family', all unique tags in 'Tags') to aid query analysis.
     -   `schema.json`: (On GCS) A representation of the Notion database schema, detailing property names and types. Uploaded by `cli.py --schema` and used by `build_index.py` and the backend.
     -   `last_entry_update_timestamp.txt`: (On GCS) A text file storing the ISO timestamp of the most recently processed entry during the last successful run of `build_index.py`. This is used by the frontend to display when the data was last synced.
--   **Backend API (`backend/`):**
-    -   **Entry Point (`backend/main.py`):** FastAPI application handling HTTP requests, responses, CORS, and basic API structure. Initializes shared RAG state via `rag_initializer` on startup.
-    -   **RAG Orchestrator (`backend/rag_query.py`):** Contains the main `perform_rag_query` function which orchestrates the entire RAG pipeline by calling specialized modules. Accesses shared state (clients, Pinecone index, data from GCS) dynamically from `rag_initializer`. Includes `execute_rag_query_sync` wrapper for CLI use.
-    -   **Shared State Manager (`backend/rag_initializer.py`):** Loads and holds shared components (Pinecone index client, mappings from GCS, metadata from GCS, schema from GCS, LLM clients) as module globals. Provides functions for initialization, accessed by entry points and other modules.
-    -   **Query Analyzer (`backend/query_analyzer.py`):** Handles LLM calls to analyze the user query and extract structured filters (date ranges, metadata), using schema and distinct values loaded from GCS.
-    -   **Retrieval Logic (`backend/retrieval_logic.py`):** Handles embedding generation, Pinecone searching (vector search + metadata filtering), and applying metadata filter fallbacks.
-    -   **LLM Interface (`backend/llm_interface.py`):** Handles interaction with different LLM providers (OpenAI, Anthropic) for final answer generation.
-    -   **Prompt Constructor (`backend/prompt_constructor.py`):** Assembles the final prompts for the LLM based on context, query type, and fallback status.
-    -   **Cost Utility (`backend/cost_utils.py`):** Calculates estimated query cost based on token usage across different steps.
-    -   **Configuration (`backend/rag_config.py`):** Defines constants, file paths, default models, and the `MODEL_CONFIG` dictionary (model properties, providers, pricing).
+-   **Backend API (`api/`):**
+    -   **Entry Point (`api/main.py`):** FastAPI application handling HTTP requests, responses, CORS, and basic API structure. Initializes shared RAG state via `rag_initializer` on startup.
+    -   **RAG Orchestrator (`api/rag_query.py`):** Contains the main `perform_rag_query` function which orchestrates the entire RAG pipeline by calling specialized modules. Accesses shared state (clients, Pinecone index, data from GCS) dynamically from `rag_initializer`. Includes `execute_rag_query_sync` wrapper for CLI use.
+    -   **Shared State Manager (`api/rag_initializer.py`):** Loads and holds shared components (Pinecone index client, mappings from GCS, metadata from GCS, schema from GCS, LLM clients) as module globals. Provides functions for initialization, accessed by entry points and other modules.
+    -   **Query Analyzer (`api/query_analyzer.py`):** Handles LLM calls to analyze the user query and extract structured filters (date ranges, metadata), using schema and distinct values loaded from GCS.
+    -   **Retrieval Logic (`api/retrieval_logic.py`):** Handles embedding generation, Pinecone searching (vector search + metadata filtering), and applying metadata filter fallbacks.
+    -   **LLM Interface (`api/llm_interface.py`):** Handles interaction with different LLM providers (OpenAI, Anthropic) for final answer generation.
+    -   **Prompt Constructor (`api/prompt_constructor.py`):** Assembles the final prompts for the LLM based on context, query type, and fallback status.
+    -   **Cost Utility (`api/cost_utils.py`):** Calculates estimated query cost based on token usage across different steps.
+    -   **Configuration (`api/rag_config.py`):** Defines constants, file paths, default models, and the `MODEL_CONFIG` dictionary (model properties, providers, pricing).
     -   Provides an endpoint (e.g., `/api/query`) to receive user queries, including an optional `model_name` for selecting the LLM.
     -   Provides an endpoint (`/api/last-updated`) to retrieve the timestamp from `last_entry_update_timestamp.txt` (stored on GCS).
 -   **LLM Providers (OpenAI, Anthropic):** Used for generating text embeddings (e.g., OpenAI's `text-embedding-ada-002`) and for powering Large Language Model (LLM) calls (e.g., OpenAI's `gpt-4o`, `gpt-4o-mini`, Anthropic's `claude-3-5-haiku-20241022`) for query analysis and final answer generation.
@@ -79,60 +79,60 @@ graph TD
 
 ## 3. Backend API Query Flow
 
-The main orchestration happens in `backend/rag_query.py` (`perform_rag_query`), called by `backend/main.py` for API requests or `cli.py` (via `execute_rag_query_sync`) for command-line queries. Shared state like clients and loaded data is managed by `backend/rag_initializer.py`.
+The main orchestration happens in `api/rag_query.py` (`perform_rag_query`), called by `api/main.py` for API requests or `cli.py` (via `execute_rag_query_sync`) for command-line queries. Shared state like clients and loaded data is managed by `api/rag_initializer.py`.
 
 ### 3.1. Request Reception & Initialization
 
--   The FastAPI app (`main.py`) receives a POST request to `/api/query` with `{"query": "...", "model_name": "..."}`.
--   On startup, `main.py` calls functions in `rag_initializer.py` to load data (initialize Pinecone index client, load mapping from GCS, metadata from GCS, schema from GCS) and initialize LLM clients (OpenAI, Anthropic) based on API keys. These are stored as globals within `rag_initializer`.
--   `rag_config.py` holds static configuration like `MODEL_CONFIG`.
+-   The FastAPI app (`main.py`, located in `api/`) receives a POST request to `/api/query` with `{"query": "...", "model_name": "..."}`.
+-   On startup, `main.py` calls functions in `rag_initializer.py` (both in `api/`) to load data (initialize Pinecone index client, load mapping from GCS, metadata from GCS, schema from GCS) and initialize LLM clients (OpenAI, Anthropic) based on API keys. These are stored as globals within `rag_initializer`.
+-   `rag_config.py` (in `api/`) holds static configuration like `MODEL_CONFIG`.
 -   The `/api/last-updated` endpoint reads `last_entry_update_timestamp.txt` from GCS.
 
 ### 3.2. Query Analysis (`query_analyzer.py`)
 
 -   **Goal:** Convert natural language query to structured filters.
--   **Process:** Orchestrated by `rag_query.py`.
-    1.  `rag_query.py` calls `analyze_query_for_filters` in `query_analyzer.py`.
-    2.  `query_analyzer.py` accesses the initialized `openai_client`, `schema_properties`, and `distinct_metadata_values` from `rag_initializer`.
+-   **Process:** Orchestrated by `api/rag_query.py`.
+    1.  `rag_query.py` calls `analyze_query_for_filters` in `api/query_analyzer.py`.
+    2.  `query_analyzer.py` accesses the initialized `openai_client`, `schema_properties`, and `distinct_metadata_values` from `api/rag_initializer`.
     3.  It constructs a prompt (including current date, schema, distinct values) and sends the user query to the configured query analysis LLM (e.g., `gpt-4o`).
     4.  The LLM returns a JSON containing optional `date_range` and `filters` list.
--   **Output:** `query_analyzer.py` returns a dictionary to `rag_query.py` with the extracted `filters`, token counts, and any errors.
+-   **Output:** `query_analyzer.py` returns a dictionary to `api/rag_query.py` with the extracted `filters`, token counts, and any errors.
 
 ### 3.3. Pre-filtering Candidate Entries (`retrieval_logic.py`)
 
 -   **Goal:** Narrow the search space using metadata.
--   **Process:** Orchestrated by `rag_query.py`.
-    1.  `rag_query.py` calls `apply_metadata_filters` in `retrieval_logic.py`, passing the full entry list (from `rag_initializer.mapping_data_list`), the `filter_analysis` results, and distinct values (from `rag_initializer.distinct_metadata_values`).
+-   **Process:** Orchestrated by `api/rag_query.py`.
+    1.  `rag_query.py` calls `apply_metadata_filters` in `api/retrieval_logic.py`, passing the full entry list (from `api/rag_initializer.mapping_data_list`), the `filter_analysis` results, and distinct values (from `api/rag_initializer.distinct_metadata_values`).
     2.  `apply_metadata_filters` performs sequential filtering based on date range, other metadata (tags), and names, implementing the OR logic for names and the fallback mechanisms for tags and names if initial filtering yields zero results.
--   **Output:** `apply_metadata_filters` returns a dictionary to `rag_query.py` containing the final list of candidate entries for counting, the count itself, and various flags indicating active filters and whether fallbacks were triggered.
+-   **Output:** `apply_metadata_filters` returns a dictionary to `api/rag_query.py` containing the final list of candidate entries for counting, the count itself, and various flags indicating active filters and whether fallbacks were triggered.
 
 ### 3.4. Semantic Search (`retrieval_logic.py`)
 
--   **If Candidate Indices Exist:** Orchestrated by `rag_query.py`.
-    1.  **Query Embedding:** `rag_query.py` calls `get_embedding` in `retrieval_logic.py` to get the query vector using the OpenAI client from `rag_initializer`.
-    2.  **Pinecone Search:** `rag_query.py` calls a search function in `retrieval_logic.py` (e.g., `perform_pinecone_search`). This function uses the Pinecone index client (from `rag_initializer.pinecone_index_client`) to query the index with the query vector and any metadata filters derived from pre-filtering (step 3.3).
--   **Output:** The Pinecone search returns the top `k` matching results, typically including `page_id`s, scores, and potentially metadata, to `rag_query.py`.
+-   **If Candidate Indices Exist:** Orchestrated by `api/rag_query.py`.
+    1.  **Query Embedding:** `rag_query.py` calls `get_embedding` in `api/retrieval_logic.py` to get the query vector using the OpenAI client from `api/rag_initializer`.
+    2.  **Pinecone Search:** `rag_query.py` calls a search function in `api/retrieval_logic.py` (e.g., `perform_pinecone_search`). This function uses the Pinecone index client (from `api/rag_initializer.pinecone_index_client`) to query the index with the query vector and any metadata filters derived from pre-filtering (step 3.3).
+-   **Output:** The Pinecone search returns the top `k` matching results, typically including `page_id`s, scores, and potentially metadata, to `api/rag_query.py`.
 
 ### 3.5. Context Retrieval (`rag_query.py`)
 
--   This logic remains within `rag_query.py`.
--   It uses the retrieved `page_id`s from Pinecone to look up the corresponding entry data (title, content, date, page_id) from the `mapping_data_list` (loaded from `index_mapping.json` on GCS via `rag_initializer`).
+-   This logic remains within `api/rag_query.py`.
+-   It uses the retrieved `page_id`s from Pinecone to look up the corresponding entry data (title, content, date, page_id) from the `mapping_data_list` (loaded from `index_mapping.json` on GCS via `api/rag_initializer`).
 -   It constructs context strings for the LLM and prepares the `sources` list for the final response, generating Notion URLs from `page_id`s.
 
 ### 3.6. Final Answer Generation (LLM - `llm_interface.py`)
 
 -   **Goal:** Generate the narrative answer using the selected model.
--   **Process:** Orchestrated by `rag_query.py`.
-    1.  `rag_query.py` uses the `model_name` to get configuration from `MODEL_CONFIG`.
-    2.  It calls `construct_final_prompts` (from `prompt_constructor.py`) to assemble the system and user prompts, incorporating retrieved context and flags (e.g., fallback status, query type).
-    3.  It calls `generate_final_answer` in `llm_interface.py`, passing the prompts and model config.
-    4.  `llm_interface.py` accesses the appropriate client (OpenAI or Anthropic) via `rag_initializer`, makes the API call using `asyncio.to_thread`, and returns the text answer, token counts, and any errors.
--   **Output:** `llm_interface.py` returns the generated text, tokens, and error status to `rag_query.py`. `rag_query.py` then calls `calculate_estimated_cost` (from `cost_utils.py`) to get the final cost.
+-   **Process:** Orchestrated by `api/rag_query.py`.
+    1.  `rag_query.py` uses the `model_name` to get configuration from `MODEL_CONFIG` (defined in `api/rag_config.py`).
+    2.  It calls `construct_final_prompts` (from `api/prompt_constructor.py`) to assemble the system and user prompts, incorporating retrieved context and flags (e.g., fallback status, query type).
+    3.  It calls `generate_final_answer` in `api/llm_interface.py`, passing the prompts and model config.
+    4.  `llm_interface.py` accesses the appropriate client (OpenAI or Anthropic) via `api/rag_initializer`, makes the API call using `asyncio.to_thread`, and returns the text answer, token counts, and any errors.
+-   **Output:** `llm_interface.py` returns the generated text, tokens, and error status to `api/rag_query.py`. `rag_query.py` then calls `calculate_estimated_cost` (from `api/cost_utils.py`) to get the final cost.
 
-### 3.7. Response Serialization & Return (`backend/main.py`)
+### 3.7. Response Serialization & Return (`api/main.py`)
 
--   `rag_query.py` returns the final result dictionary (answer, sources, model info, tokens, cost) to `main.py`.
--   `main.py` validates and serializes this using Pydantic models (`QueryResponse`, `SourceDocument`) and sends the JSON response back to the client.
+-   `api/rag_query.py` returns the final result dictionary (answer, sources, model info, tokens, cost) to `api/main.py`.
+-   `api/main.py` validates and serializes this using Pydantic models (`QueryResponse`, `SourceDocument`) and sends the JSON response back to the client.
 
 ## 4. Frontend UI (`frontend/src/App.tsx`)
 
