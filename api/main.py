@@ -61,7 +61,7 @@ from .rag_initializer import (
 
 # --- FastAPI Lifespan Manager for Startup/Shutdown ---
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app_instance: FastAPI):
     logger.critical("LIFESPAN FUNCTION ENTERED!")
     # Code here runs on startup
     logger.info("Application startup: Initializing RAG system and LLM clients...")
@@ -100,12 +100,19 @@ async def lifespan(app: FastAPI):
     logger.info("Application shutdown: Cleaning up resources (if any)...")
 
 # --- FastAPI App Instance with Lifespan Manager ---
-app = FastAPI(
-    title="Notion Second Brain API",
-    description="API for querying the Notion Second Brain RAG index.",
-    version="0.1.0",
-    lifespan=lifespan # Assign the lifespan manager
-)
+logger.info("API_MAIN: About to instantiate FastAPI app.")
+try:
+    app = FastAPI(
+        title="Notion Second Brain API",
+        description="API for querying the Notion Second Brain RAG index.",
+        version="0.1.0",
+        lifespan=lifespan # Assign the lifespan manager
+    )
+    logger.info("API_MAIN: FastAPI app instantiated successfully.")
+except Exception as e_app_create:
+    logger.critical(f"API_MAIN: FAILED TO INSTANTIATE FastAPI app: {e_app_create}", exc_info=True)
+    # Optionally raise to ensure Vercel sees a startup failure
+    # raise
 
 # --- Configure CORS --- (Essential for frontend interaction)
 # Adjust origins based on your frontend development/production URLs
