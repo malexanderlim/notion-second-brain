@@ -179,7 +179,29 @@ const MainAppLayout: React.FC = () => {
     } else {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        const recorder = new MediaRecorder(stream);
+        
+        // Attempt to force WebM format with opus codec
+        const preferredOptions = {
+          mimeType: 'audio/webm;codecs=opus',
+          audioBitsPerSecond: 128000 // Optional: set a preferred bitrate
+        };
+        let recorderOptions = {}; // Default to empty options
+
+        if (MediaRecorder.isTypeSupported(preferredOptions.mimeType)) {
+          console.log(`Using preferred MIME type: ${preferredOptions.mimeType}`);
+          recorderOptions = preferredOptions;
+        } else {
+          // Log if specific codecs of webm are not supported, try broader webm
+          if (MediaRecorder.isTypeSupported('audio/webm')) {
+            console.warn(`${preferredOptions.mimeType} with opus not supported, trying generic audio/webm.`);
+            recorderOptions = { mimeType: 'audio/webm' };
+          } else {
+            console.warn(`${preferredOptions.mimeType} and audio/webm are not supported. Using browser default format.`);
+            // No specific options, browser will use its default
+          }
+        }
+
+        const recorder = new MediaRecorder(stream, recorderOptions);
         mediaRecorderRef.current = recorder;
         audioChunksRef.current = [];
         setRecordingTime(0);
@@ -210,13 +232,19 @@ const MainAppLayout: React.FC = () => {
             setTranscriptionError("No audio was recorded. Please try again.");
             return;
           }
-          const audioBlobMimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
-          const audioBlob = new Blob(audioChunksRef.current, { type: audioBlobMimeType });
+
+          // Use the actual mimeType from the recorder instance if available, otherwise fallback
+          const actualMimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
+          console.log(`MediaRecorder actual mimeType onstop: ${actualMimeType}`); // Log the actual mimeType
+
+          const audioBlob = new Blob(audioChunksRef.current, { type: actualMimeType });
+          console.log(`Audio recording blob created. Type: ${audioBlob.type}, Size: ${audioBlob.size} bytes`);
+          
           audioChunksRef.current = [];
           setIsTranscribing(true);
           setTranscriptionError(null);
           const formData = new FormData();
-          const fileExtension = getAudioFileExtension(audioBlobMimeType);
+          const fileExtension = getAudioFileExtension(actualMimeType);
           const fileName = `voice_query.${fileExtension}`;
           formData.append("file", audioBlob, fileName);
           try {
