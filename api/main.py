@@ -236,9 +236,10 @@ def get_last_updated_timestamp(current_user: dict = Depends(get_current_active_u
     return LastUpdatedResponse(last_updated_timestamp=timestamp_str)
 
 @app.post("/api/transcribe", response_model=TranscriptionResponse, tags=["Transcription"])
-async def transcribe_audio(file: UploadFile = File(...), current_user: dict = Depends(get_current_active_user)):
+async def transcribe_audio(request: Request, file: UploadFile = File(...), current_user: dict = Depends(get_current_active_user)):
     """Receives an audio file and returns its transcription using OpenAI Whisper."""
-    logger.info(f"Received audio file for transcription: {file.filename}, content type: {file.content_type}")
+    client_ip = request.client.host if request.client else "Unknown IP"
+    logger.info(f"Received audio file for transcription: {file.filename}, content type: {file.content_type}, client IP: {client_ip}")
 
     openai_client = get_openai_client() # Get the initialized client
     if not openai_client:
@@ -252,7 +253,8 @@ async def transcribe_audio(file: UploadFile = File(...), current_user: dict = De
 
         transcription_result = openai_client.audio.transcriptions.create(
             model="whisper-1",
-            file=(file.filename, file_bytes)
+            file=(file.filename, file_bytes),
+            language="en"  # Explicitly set language to English
         )
         
         transcribed_text = transcription_result.text
