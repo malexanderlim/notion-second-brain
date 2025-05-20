@@ -1,2 +1,20 @@
+fastapi>=0.100.0
+uvicorn>=0.23.0 # For local development
+python-dotenv>=1.0.0
 Authlib>=1.0.0  # Using a version specifier for stability, adjust as needed
 itsdangerous>=2.0.0 # For Starlette sessions, adjust as needed 
+
+# RAG & API Dependencies (copied from root requirements.txt)
+openai
+langchain-community
+langchain-openai
+anthropic
+langchain-text-splitters
+requests
+python-multipart # For FastAPI file uploads (e.g., transcription)
+pinecone-client>=3.0.0,<4.0.0
+google-cloud-storage # For Google Cloud Storage access from API
+
+# Add any other specific dependencies your api/*.py files import
+
+# Please review and add other direct dependencies like openai, anthropic, pinecone-client, google-cloud-storage if imported in api/*.py files 
