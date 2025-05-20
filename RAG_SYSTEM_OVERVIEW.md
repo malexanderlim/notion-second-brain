@@ -34,7 +34,8 @@ graph TD
     -   `schema.json`: (On GCS) A representation of the Notion database schema, detailing property names and types. Uploaded by `cli.py --schema` and used by `build_index.py` and the backend.
     -   `last_entry_update_timestamp.txt`: (On GCS) A text file storing the ISO timestamp of the most recently processed entry during the last successful run of `build_index.py`. This is used by the frontend to display when the data was last synced.
 -   **Backend API (`api/`):**
-    -   **Entry Point (`api/main.py`):** FastAPI application handling HTTP requests, responses, CORS, and basic API structure. Initializes shared RAG state via `rag_initializer` on startup.
+    -   **Entry Point (`api/main.py`):** FastAPI application handling HTTP requests, responses, CORS, and basic API structure. Initializes shared RAG state via `rag_initializer` on startup. Also includes Google OAuth authentication routes and session management.
+    -   **Authentication Module (`api/auth.py`):** Contains logic for Google OAuth client setup, login/callback handling, user validation against `AUTHORIZED_USER_EMAIL`, and session data management. Provides a dependency for protecting routes.
     -   **RAG Orchestrator (`api/rag_query.py`):** Contains the main `perform_rag_query` function which orchestrates the entire RAG pipeline by calling specialized modules. Accesses shared state (clients, Pinecone index, data from GCS) dynamically from `rag_initializer`. Includes `execute_rag_query_sync` wrapper for CLI use.
     -   **Shared State Manager (`api/rag_initializer.py`):** Loads and holds shared components (Pinecone index client, mappings from GCS, metadata from GCS, schema from GCS, LLM clients) as module globals. Provides functions for initialization, accessed by entry points and other modules.
     -   **Query Analyzer (`api/query_analyzer.py`):** Handles LLM calls to analyze the user query and extract structured filters (date ranges, metadata), using schema and distinct values loaded from GCS.
@@ -43,13 +44,21 @@ graph TD
     -   **Prompt Constructor (`api/prompt_constructor.py`):** Assembles the final prompts for the LLM based on context, query type, and fallback status.
     -   **Cost Utility (`api/cost_utils.py`):** Calculates estimated query cost based on token usage across different steps.
     -   **Configuration (`api/rag_config.py`):** Defines constants, file paths, default models, and the `MODEL_CONFIG` dictionary (model properties, providers, pricing).
-    -   Provides an endpoint (e.g., `/api/query`) to receive user queries, including an optional `model_name` for selecting the LLM.
+    -   Provides an endpoint (e.g., `/api/query`) to receive user queries, including an optional `model_name` for selecting the LLM. This endpoint, along with `/api/last-updated` and `/api/transcribe`, is now protected and requires authentication.
     -   Provides an endpoint (`/api/last-updated`) to retrieve the timestamp from `last_entry_update_timestamp.txt` (stored on GCS).
+    -   Provides authentication endpoints:
+        -   `GET /api/auth/login/google`: Initiates Google OAuth login.
+        -   `GET /api/auth/callback/google`: Handles Google's callback, authenticates user, and sets session.
+        -   `GET /api/auth/me`: Returns current authenticated user's status and details.
+        -   `POST /api/auth/logout`: Clears user session.
 -   **LLM Providers (OpenAI, Anthropic):** Used for generating text embeddings (e.g., OpenAI's `text-embedding-ada-002`) and for powering Large Language Model (LLM) calls (e.g., OpenAI's `gpt-4o`, `gpt-4o-mini`, Anthropic's `claude-3-5-haiku-20241022`) for query analysis and final answer generation.
--   **Frontend UI (`frontend/src/App.tsx`):**
+-   **Frontend UI (`frontend/`):**
     -   React/Vite/TypeScript application.
-    -   Provides an interface for users to select a model, input queries, and view answers with sources, model details, and estimated costs.
-    -   Displays the "Last Synced Entry" date by fetching it from the `/api/last-updated` backend endpoint.
+    -   Manages authentication state using `AuthContext` (`frontend/src/contexts/AuthContext.tsx`).
+    -   Handles routing and protected views in `frontend/src/App.tsx`.
+    -   Provides a `LoginPage` (`frontend/src/pages/LoginPage.tsx`) for initiating login.
+    -   Includes a `LogoutButton` (`frontend/src/components/auth/LogoutButton.tsx`).
+    -   Provides an interface for users to select a model, input queries, and view answers with sources, model details, and estimated costs, after successful authentication.
 
 ## 2. Indexing Process (`build_index.py`)
 
@@ -79,11 +88,11 @@ graph TD
 
 ## 3. Backend API Query Flow
 
-The main orchestration happens in `api/rag_query.py` (`perform_rag_query`), called by `api/main.py` for API requests or `cli.py` (via `execute_rag_query_sync`) for command-line queries. Shared state like clients and loaded data is managed by `api/rag_initializer.py`.
+The main orchestration happens in `api/rag_query.py` (`perform_rag_query`), called by `api/main.py` for API requests or `cli.py` (via `execute_rag_query_sync`) for command-line queries. Access to API endpoints like `/api/query` first requires successful authentication handled by `api/main.py` and `api/auth.py`. Shared state like clients and loaded data is managed by `api/rag_initializer.py`.
 
-### 3.1. Request Reception & Initialization
+### 3.1. Request Reception & Initialization (and Authentication)
 
--   The FastAPI app (`main.py`, located in `api/`) receives a POST request to `/api/query` with `{"query": "...", "model_name": "..."}`.
+-   The FastAPI app (`main.py`, located in `api/`) receives a POST request to `/api/query` with `{"query": "...", "model_name": "..."}`. Before processing the query, the authentication dependency derived from `api/auth.py` verifies the user's session. If unauthenticated, a 401 error is returned.
 -   On startup, `main.py` calls functions in `rag_initializer.py` (both in `api/`) to load data (initialize Pinecone index client, load mapping from GCS, metadata from GCS, schema from GCS) and initialize LLM clients (OpenAI, Anthropic) based on API keys. These are stored as globals within `rag_initializer`.
 -   `rag_config.py` (in `api/`) holds static configuration like `MODEL_CONFIG`.
 -   The `/api/last-updated` endpoint reads `last_entry_update_timestamp.txt` from GCS.
@@ -134,10 +143,15 @@ The main orchestration happens in `api/rag_query.py` (`perform_rag_query`), call
 -   `api/rag_query.py` returns the final result dictionary (answer, sources, model info, tokens, cost) to `api/main.py`.
 -   `api/main.py` validates and serializes this using Pydantic models (`QueryResponse`, `SourceDocument`) and sends the JSON response back to the client.
 
-## 4. Frontend UI (`frontend/src/App.tsx`)
+## 4. Frontend UI (`frontend/`)
 
--   **Query Submission:** User types a query and submits.
--   **API Call:** An `axios` POST request is made to the backend's `/api/query` endpoint, now including the `model_name` selected by the user.
+-   **Authentication:**
+    -   On load, `AuthProvider` calls `/api/auth/me` to check authentication status.
+    -   `App.tsx` uses `isLoading` and `isAuthenticated` from `AuthContext` to either show a loading spinner, redirect to `/login` (if not authenticated), or display `MainAppLayout` (if authenticated).
+    -   `LoginPage.tsx` provides a button to redirect to `/api/auth/login/google`.
+    -   `LogoutButton.tsx` in `MainAppLayout.tsx` makes a POST request to `/api/auth/logout`.
+-   **Query Submission:** User types a query and submits (only possible when authenticated and `MainAppLayout` is rendered).
+-   **API Call:** An `axios` POST request is made to the backend's `/api/query` endpoint, including the `model_name` selected by the user and `withCredentials: true` to send session cookies.
 -   **Response Handling:**
     -   **Answer Display:** The `answer` string from the API response is rendered using `ReactMarkdown`.
         -   Information about the `model_used`, `provider`, token counts, and `estimated_cost_usd` is displayed.

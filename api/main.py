@@ -1,5 +1,7 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, File, UploadFile, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.sessions import SessionMiddleware # Added for session management
+from starlette.responses import RedirectResponse # Added for redirecting
 from pydantic import BaseModel, HttpUrl
 from typing import List, Dict, Any, Optional, Union
 import os
@@ -12,6 +14,9 @@ from datetime import datetime, timezone # Added timezone
 
 # --- Load Environment Variables First ---
 load_dotenv()
+
+# --- Import auth module AFTER loading .env ---
+from .auth import oauth, SESSION_SECRET_KEY, AUTHORIZED_USER_EMAIL, get_current_active_user # Added get_current_active_user
 
 # --- Vercel GCP Credentials Handling ---
 # This block writes the GCP service account JSON from an environment variable
@@ -81,6 +86,23 @@ except Exception as e_app_create:
     logger.critical(f"API_MAIN: FAILED TO INSTANTIATE FastAPI app: {e_app_create}", exc_info=True)
     raise # Re-raise to ensure Vercel sees a startup failure if app creation fails
 
+# --- Add Session Middleware BEFORE CORS or other middlewares that might depend on session state ---
+if not SESSION_SECRET_KEY:
+    logger.critical("API_MAIN: SESSION_SECRET_KEY is not set. Session middleware cannot be securely initialized.")
+    # Depending on policy, you might raise an error here to prevent startup without a session key.
+    # For now, it will proceed, but sessions will be insecure or fail if the key is actually needed by the middleware.
+    # raise ValueError("SESSION_SECRET_KEY must be set for session middleware.") 
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY if SESSION_SECRET_KEY else "dummy_secret_for_startup_without_actual_key_if_allowed", # Ensure a string is passed
+    # session_cookie="session_id",  # Optional: customize cookie name
+    # max_age=14 * 24 * 60 * 60,  # Optional: 14 days in seconds, for cookie expiration
+    https_only=os.getenv("ENVIRONMENT", "development").lower() == "production", # Enforce HTTPS for cookies in production
+    same_site="lax" # Recommended SameSite policy
+)
+logger.info(f"API_MAIN: SessionMiddleware added. HTTPS_ONLY for cookies: {os.getenv('ENVIRONMENT', 'development').lower() == 'production'}")
+
 # --- Configure CORS --- (Essential for frontend interaction)
 # Adjust origins based on your frontend development/production URLs
 origins = [
@@ -137,7 +159,7 @@ def read_root():
     return {"message": "Welcome to the Notion Second Brain API"}
 
 @app.post("/api/query", response_model=QueryResponse, tags=["RAG"])
-async def handle_query(request: QueryRequest):
+async def handle_query(request: QueryRequest, current_user: dict = Depends(get_current_active_user)):
     """Receives a user query, performs RAG, and returns the answer with sources."""
     user_query = request.query
     model_name = request.model_name # Extract model_name
@@ -189,7 +211,7 @@ async def handle_query(request: QueryRequest):
         raise HTTPException(status_code=500, detail=f"An internal server error occurred while processing the query.")
 
 @app.get("/api/last-updated", response_model=LastUpdatedResponse, tags=["General"])
-def get_last_updated_timestamp():
+def get_last_updated_timestamp(current_user: dict = Depends(get_current_active_user)):
     """Retrieves the timestamp of the last successfully processed entry from the index build process."""
     logger.info("API_MAIN: get_last_updated_timestamp CALLED.") # New Log
     
@@ -214,7 +236,7 @@ def get_last_updated_timestamp():
     return LastUpdatedResponse(last_updated_timestamp=timestamp_str)
 
 @app.post("/api/transcribe", response_model=TranscriptionResponse, tags=["Transcription"])
-async def transcribe_audio(file: UploadFile = File(...)):
+async def transcribe_audio(file: UploadFile = File(...), current_user: dict = Depends(get_current_active_user)):
     """Receives an audio file and returns its transcription using OpenAI Whisper."""
     logger.info(f"Received audio file for transcription: {file.filename}, content type: {file.content_type}")
 
@@ -239,6 +261,103 @@ async def transcribe_audio(file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Error during audio transcription for file {file.filename}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to transcribe audio: {str(e)}")
+
+# --- Authentication Endpoints ---
+
+@app.get("/api/auth/login/google", tags=["Authentication"])
+async def login_via_google(request: Request):
+    """Initiates Google OAuth2 login flow by redirecting the user to Google."""
+    # The redirect URI must match one of the Authorized redirect URIs in your Google Cloud Console
+    # For local development, this would be http://localhost:8000/api/auth/callback/google
+    # For production, it would be https://your-app-domain.vercel.app/api/auth/callback/google
+    # It's best to make this configurable or construct it dynamically based on the request or environment.
+    # For now, we'll use a placeholder that needs to be made robust.
+    
+    # Construct redirect_uri based on request scheme and host, assuming callback is always at /api/auth/callback/google
+    # This is more robust than hardcoding localhost.
+    redirect_uri = request.url_for("auth_via_google_callback")
+    logger.info(f"Generated redirect_uri for Google OAuth: {redirect_uri}")
+    
+    return await oauth.google.authorize_redirect(request, str(redirect_uri))
+
+# We will add the callback route /api/auth/callback/google next.
+@app.get("/api/auth/callback/google", name="auth_via_google_callback", tags=["Authentication"])
+async def auth_via_google_callback(request: Request):
+    """Handles the callback from Google after user authentication."""
+    try:
+        token = await oauth.google.authorize_access_token(request)
+    except Exception as e:
+        logger.error(f"Error authorizing access token from Google: {e}", exc_info=True)
+        # Redirect to a frontend error page or show a generic error
+        # For now, raising HTTPException, but a redirect to frontend with error query param is better UX
+        raise HTTPException(status_code=401, detail="Could not authorize access token from Google. Please try again.")
+
+    user_info = token.get('userinfo')
+    if not user_info:
+        logger.error("Userinfo not found in token from Google.")
+        raise HTTPException(status_code=400, detail="Could not fetch user information from Google.")
+
+    user_email = user_info.get('email')
+    user_name = user_info.get('name')
+
+    if not user_email:
+        logger.error("Email not found in userinfo from Google.")
+        raise HTTPException(status_code=400, detail="Email not found in user information from Google.")
+
+    logger.info(f"User authenticated with Google: {user_email}, Name: {user_name}")
+
+    # Authorization check
+    if not AUTHORIZED_USER_EMAIL:
+        logger.critical("AUTHORIZED_USER_EMAIL is not set in environment. Denying access by default.")
+        # This should ideally redirect to a more user-friendly error page on the frontend
+        raise HTTPException(status_code=403, detail="Application access is restricted and no authorized user is configured.")
+    
+    if user_email.lower() != AUTHORIZED_USER_EMAIL.lower():
+        logger.warning(f"Unauthorized login attempt by {user_email}. Expected {AUTHORIZED_USER_EMAIL}.")
+        # This should also ideally redirect to a more user-friendly error page on the frontend
+        raise HTTPException(status_code=403, detail=f"Access denied. User {user_email} is not authorized for this application.")
+
+    # If authorized, store user info in session
+    request.session['user'] = {
+        'email': user_email,
+        'name': user_name,
+        # You can add more fields from user_info if needed, like 'picture'
+        'picture': user_info.get('picture') 
+    }
+    logger.info(f"User {user_email} successfully authorized and session created.")
+
+    # Redirect to the frontend application's home page or a designated post-login page
+    # This URL should ideally be configurable
+    frontend_url = os.getenv("FRONTEND_URL", "/") # Default to root if not set
+    return RedirectResponse(url=frontend_url)
+
+@app.get("/api/auth/me", tags=["Authentication"])
+async def get_current_user(request: Request):
+    """Returns the currently authenticated user's information from the session, if any."""
+    user = request.session.get('user')
+    if not user:
+        # No active session or user not in session
+        # You might return a 401, but for a GET /me endpoint, returning an empty dict 
+        # or a specific structure indicating no user is also common and can be handled by frontend.
+        # For strictness with protected routes later, 401/403 is better there.
+        # Here, we just inform about the absence of a session user.
+        logger.info("GET /api/auth/me: No active user session found.")
+        return {"authenticated": False, "user": None}
+    
+    logger.info(f"GET /api/auth/me: Active session found for user {user.get('email')}.")
+    return {"authenticated": True, "user": user}
+
+@app.post("/api/auth/logout", tags=["Authentication"])
+async def logout(request: Request):
+    """Clears the user session (logs them out)."""
+    user_email_before_logout = request.session.get('user', {}).get('email')
+    request.session.clear()
+    logger.info(f"POST /api/auth/logout: Session cleared for user {user_email_before_logout if user_email_before_logout else '[no session found]'}.")
+    
+    # Redirect to the frontend application's login page or home page
+    # This URL should ideally be configurable, potentially different from post-login redirect.
+    frontend_logout_redirect_url = os.getenv("FRONTEND_LOGOUT_URL", os.getenv("FRONTEND_URL", "/"))
+    return RedirectResponse(url=frontend_logout_redirect_url, status_code=303) # Use 303 for POST-redirect-GET
 
 # --- Optional: Add command to run the server easily ---
 # uvicorn backend.main:app --reload --port 8000

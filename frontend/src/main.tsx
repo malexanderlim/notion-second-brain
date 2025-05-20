@@ -2,6 +2,8 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
+import { AuthProvider } from './contexts/AuthContext'
+import { BrowserRouter } from 'react-router-dom'
 
 // Add theme handling
 const root = document.documentElement;
@@ -23,6 +25,10 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', eve
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <App />
+    <BrowserRouter>
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    </BrowserRouter>
   </React.StrictMode>,
 )
