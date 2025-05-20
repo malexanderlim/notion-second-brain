@@ -109,7 +109,7 @@ origins = [
     "http://localhost:5173",  # Default Vite dev server port
     "http://localhost:3000",  # Common alternative dev port
     # Add your frontend production URL here later, e.g.:
-    # "https://your-frontend-app.vercel.app", 
+    "https://notion-second-brain-azure.vercel.app", # ADDED for production
 ]
 
 app.add_middleware(
@@ -270,15 +270,24 @@ async def login_via_google(request: Request):
     # The redirect URI must match one of the Authorized redirect URIs in your Google Cloud Console
     # For local development, this would be http://localhost:8000/api/auth/callback/google
     # For production, it would be https://your-app-domain.vercel.app/api/auth/callback/google
-    # It's best to make this configurable or construct it dynamically based on the request or environment.
-    # For now, we'll use a placeholder that needs to be made robust.
     
-    # Construct redirect_uri based on request scheme and host, assuming callback is always at /api/auth/callback/google
-    # This is more robust than hardcoding localhost.
-    redirect_uri = request.url_for("auth_via_google_callback")
-    logger.info(f"Generated redirect_uri for Google OAuth: {redirect_uri}")
+    app_base_url = os.getenv("FRONTEND_URL")
+    if not app_base_url:
+        logger.error("CRITICAL: FRONTEND_URL environment variable is not set. Cannot construct Google OAuth redirect_uri for production.")
+        # Depending on the app's strictness, you might fall back to request.url_for for local dev
+        # or raise an error to prevent misconfiguration in production.
+        # For Vercel deployment, FRONTEND_URL should always be available.
+        raise HTTPException(
+            status_code=500, 
+            detail="Server configuration error: FRONTEND_URL is not set, cannot initiate OAuth."
+        )
+
+    # Ensure no trailing slash from app_base_url and then append the known callback path
+    redirect_uri = f"{app_base_url.rstrip('/')}/api/auth/callback/google"
     
-    return await oauth.google.authorize_redirect(request, str(redirect_uri))
+    logger.info(f"Using FRONTEND_URL ('{app_base_url}') to construct redirect_uri for Google OAuth: {redirect_uri}")
+    
+    return await oauth.google.authorize_redirect(request, redirect_uri) # Ensure redirect_uri is a string
 
 # We will add the callback route /api/auth/callback/google next.
 @app.get("/api/auth/callback/google", name="auth_via_google_callback", tags=["Authentication"])
