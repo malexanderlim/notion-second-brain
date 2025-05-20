@@ -79,6 +79,24 @@ const AVAILABLE_MODELS = [
 ];
 const DEFAULT_MODEL = "gpt-4o-mini";
 
+const getAudioFileExtension = (mimeType: string): string => {
+  if (!mimeType) return 'webm'; // Default to webm if mimeType is somehow null/empty
+  const parts = mimeType.split('/');
+  if (parts.length > 1 && parts[0] === 'audio') {
+    const subType = parts[1].split(';')[0]; // Remove codecs if present, e.g., 'webm;codecs=opus'
+    // Handle common audio types
+    if (subType === 'webm') return 'webm';
+    if (subType === 'mp4') return 'mp4'; // For m4a, browsers might report audio/mp4
+    if (subType === 'mpeg') return 'mp3';
+    if (subType === 'ogg') return 'ogg';
+    if (subType === 'wav' || subType === 'wave' || subType === 'x-wav') return 'wav';
+    if (subType === 'm4a' || subType === 'x-m4a') return 'm4a';
+    // Add more mappings if needed
+    return subType; // Fallback to subtype itself if no specific mapping
+  }
+  return 'webm'; // Default fallback
+};
+
 const MainAppLayout: React.FC = () => {
   const { user } = useAuth();
 
@@ -192,12 +210,15 @@ const MainAppLayout: React.FC = () => {
             setTranscriptionError("No audio was recorded. Please try again.");
             return;
           }
-          const audioBlob = new Blob(audioChunksRef.current, { type: mediaRecorderRef.current?.mimeType || 'audio/webm' });
+          const audioBlobMimeType = mediaRecorderRef.current?.mimeType || 'audio/webm';
+          const audioBlob = new Blob(audioChunksRef.current, { type: audioBlobMimeType });
           audioChunksRef.current = [];
           setIsTranscribing(true);
           setTranscriptionError(null);
           const formData = new FormData();
-          formData.append("file", audioBlob, "voice_query.webm");
+          const fileExtension = getAudioFileExtension(audioBlobMimeType);
+          const fileName = `voice_query.${fileExtension}`;
+          formData.append("file", audioBlob, fileName);
           try {
             const transcribeResponse = await axios.post<{ transcription: string, error?: string }>(
               `${backendUrl}/api/transcribe`,
