@@ -143,3 +143,49 @@ To enhance scalability, reliability, and prepare for serverless deployment (espe
 *   The data pipeline is now more robust and suitable for cloud deployment.
 *   Operational overhead for managing local index files is eliminated.
 *   The system is better prepared for scaling both data volume and query load. 
+
+## 10. Debugging Voice Transcription (Frontend & Backend - OpenAI Whisper)
+
+Troubleshooting voice transcription issues, particularly discrepancies between desktop and mobile (Chrome), involved several iterations and highlighted key aspects of both `MediaRecorder` behavior and OpenAI Whisper API interactions.
+
+**Initial Problem:**
+*   Voice queries worked on desktop (Chrome) but failed on mobile (Chrome).
+*   Failures manifested as:
+    1.  HTTP 400 errors from the backend's `/api/transcribe` endpoint, specifically "Invalid file format" errors from the Whisper API.
+    2.  No errors, but completely incorrect transcriptions (e.g., English speech transcribed as Korean).
+
+**Key Learnings & Solutions:**
+
+1.  **Whisper API Filename Extension Requirement:**
+    *   **Observation:** The OpenAI Whisper API heavily relies on the filename extension provided in the `file` parameter of its `transcriptions.create` method to correctly interpret the audio format, especially when raw bytes are sent.
+    *   **Issue:** Initially, the frontend hardcoded the filename to `"voice_query.webm"`. If a mobile browser sent audio data in a different format (e.g., `audio/mp4`), this mismatch between the stated `webm` extension and the actual `mp4` content likely caused the "Invalid file format" error, even if MP4 is a supported format.
+    *   **Solution Iteration 1 (Dynamic Extension):** Modify the frontend to dynamically determine the file extension based on the `MediaRecorder` blob's `mimeType` (e.g., `audio/mp4` -> `voice_query.mp4`). This aligns with Whisper API documentation.
+
+2.  **Whisper API Language Misidentification:**
+    *   **Observation:** Even with a (presumably) correct filename extension, mobile transcriptions were sometimes wildly inaccurate (e.g., English to Korean).
+    *   **Issue:** Whisper was likely failing to auto-detect the language correctly from the mobile audio stream.
+    *   **Solution:** Explicitly set the `language="en"` parameter in the backend call to `openai_client.audio.transcriptions.create`. This immediately resolved the language misidentification problem.
+
+3.  **Standardizing `MediaRecorder` Output:**
+    *   **Observation:** `MediaRecorder` output can vary significantly between browsers and operating systems (e.g., desktop Chrome might default to `audio/webm;codecs=opus`, while mobile Chrome on some OSes might produce `audio/mp4` or `audio/m4a`).
+    *   **Strategy:** To improve consistency and leverage a well-supported, high-quality format:
+        *   Attempt to force `MediaRecorder` to use `audio/webm;codecs=opus` with a specified bitrate (e.g., 128000 bps) in the frontend.
+        *   Use `MediaRecorder.isTypeSupported()` to check if the preferred format is available.
+        *   Implement fallbacks: if `audio/webm;codecs=opus` isn't supported, try generic `audio/webm`. If that also fails, allow the browser to use its default format.
+        *   Crucially, the frontend should still use the *actual* `mimeType` reported by the `MediaRecorder` instance after recording (from `mediaRecorderRef.current.mimeType`) to create the `Blob` and determine the filename extension for the backend. This ensures that even if forcing fails, the backend receives an accurately described file.
+
+4.  **Frontend-Backend Data Flow for Audio:**
+    *   **Frontend:**
+        *   Use `MediaRecorder` (attempting to force `audio/webm;codecs=opus`).
+        *   On `onstop`, create a `Blob` using the *actual* MIME type from `mediaRecorder.mimeType`.
+        *   Determine the correct file extension from this actual MIME type.
+        *   Append the `Blob` to `FormData` with a filename that includes this correct extension (e.g., `voice_query.mp4`, `voice_query.webm`).
+    *   **Backend (`/api/transcribe`):
+        *   Receive the `UploadFile`.
+        *   Pass `(file.filename, file_bytes)` and `language="en"` to `openai_client.audio.transcriptions.create`.
+
+5.  **Diagnostic Logging:**
+    *   **Frontend:** Log the `preferredOptions.mimeType` being attempted, whether it's supported, the `actualMimeType` from `mediaRecorder.mimeType` in the `onstop` event, and the `audioBlob.type` and `audioBlob.size`.
+    *   **Backend:** Log `file.filename` and `file.content_type` (from `UploadFile`) and the client IP upon receiving a request at `/api/transcribe`. This helps verify what the server is actually receiving from different clients.
+
+**Summary of Effective Fix:** The combination of explicitly setting `language="en"` on the backend and the frontend attempting to force `audio/webm;codecs=opus` while ensuring the submitted filename *always* matches the `MediaRecorder`'s actual output `mimeType` proved to be the most robust solution for achieving consistent and accurate voice transcriptions across desktop and mobile platforms. 
