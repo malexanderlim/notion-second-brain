@@ -352,6 +352,11 @@ const MainAppLayout: React.FC = () => {
       <main className="p-4">
         <div className="min-h-screen bg-background flex items-center justify-center p-4">
           <div className="w-full max-w-2xl space-y-8">
+            {!isLoading && !response && (
+              <div className="flex justify-center mb-4">
+                <img src="/Notion_Second_Brain.png" alt="Notion Second Brain Logo" className="h-12 w-12 md:h-20 md:w-20 object-contain" />
+              </div>
+            )}
             <div className="text-center text-xs text-muted-foreground">
               {lastUpdatedInfo.loading ? (
                 <span>Loading last updated info...</span>
@@ -365,7 +370,7 @@ const MainAppLayout: React.FC = () => {
             </div>
 
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-              <div className="flex gap-2 items-center w-full">
+              <div className="flex flex-col sm:flex-row gap-2 items-center w-full">
                 <Input 
                   type="text"
                   placeholder="Ask your Notion knowledge base..."
