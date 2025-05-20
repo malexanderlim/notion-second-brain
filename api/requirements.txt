@@ -1,0 +1,2 @@
+Authlib>=1.0.0  # Using a version specifier for stability, adjust as needed
+itsdangerous>=2.0.0 # For Starlette sessions, adjust as needed 
