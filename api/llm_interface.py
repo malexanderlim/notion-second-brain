@@ -83,21 +83,46 @@ async def generate_final_answer(final_system_prompt: str,
                 logger.error(error_message)
                 return answer_text, input_tokens, output_tokens, error_message
 
-            # Use the client and class from rag_initializer
-            completion = await asyncio.to_thread(
-                current_anthropic_client.messages.create,
-                model=api_id,
-                system=final_system_prompt, # Anthropic uses 'system' prompt here
-                messages=[
-                    {"role": "user", "content": user_message_for_final_llm}
-                ],
-                max_tokens=max_output_tokens
-            )
-            answer_text = completion.content[0].text if completion.content else None
-            if completion.usage:
-                input_tokens = completion.usage.input_tokens
-                output_tokens = completion.usage.output_tokens
-                logger.info(f"Anthropic Final Answer Usage ({api_id}): Input={input_tokens}, Output={output_tokens}")
+            accumulated_text = []
+            try:
+                # Use the client and class from rag_initializer, with streaming
+                response_stream = await asyncio.to_thread(
+                    current_anthropic_client.messages.create,
+                    model=api_id,
+                    system=final_system_prompt,
+                    messages=[
+                        {"role": "user", "content": user_message_for_final_llm}
+                    ],
+                    max_tokens=max_output_tokens,
+                    stream=True
+                )
+
+                for event in response_stream:
+                    if event.type == "message_start":
+                        if event.message.usage:
+                            input_tokens = event.message.usage.input_tokens
+                            logger.info(f"Anthropic stream message_start: Input tokens={input_tokens}")
+                    elif event.type == "content_block_delta":
+                        if event.delta.type == "text_delta":
+                            accumulated_text.append(event.delta.text)
+                    elif event.type == "message_delta":
+                        if event.usage:
+                            output_tokens = event.usage.output_tokens # Anthropic SDK sums this up by final delta
+                            logger.info(f"Anthropic stream message_delta: Output tokens={output_tokens}")
+                    # We can also handle message_stop if needed for final cleanup or logging
+
+                answer_text = "".join(accumulated_text)
+                if input_tokens > 0 or output_tokens > 0:
+                     logger.info(f"Anthropic Final Answer Usage ({api_id}): Input={input_tokens}, Output={output_tokens}")
+                else:
+                    logger.warning(f"Anthropic token usage not fully reported by stream for {api_id}. Check SDK behavior.")
+
+            except Exception as e: # Catch exceptions during streaming or processing
+                logger.error(f"Error during Anthropic streaming call to model {api_id}: {e}", exc_info=True)
+                error_message = f"LLM API streaming call failed for Anthropic model {api_id}: {str(e)}"
+                # Ensure partial data is not returned as a full answer
+                answer_text = None 
+                # input_tokens and output_tokens might be partially set, or 0
         else:
             error_message = f"Unsupported LLM provider: {provider}"
             logger.error(error_message)
