@@ -273,21 +273,27 @@ async def login_via_google(request: Request):
     # For local development, this would be http://localhost:8000/api/auth/callback/google
     # For production, it would be https://your-app-domain.vercel.app/api/auth/callback/google
     
-    app_base_url = os.getenv("FRONTEND_URL")
-    if not app_base_url:
-        logger.error("CRITICAL: FRONTEND_URL environment variable is not set. Cannot construct Google OAuth redirect_uri for production.")
-        # Depending on the app's strictness, you might fall back to request.url_for for local dev
-        # or raise an error to prevent misconfiguration in production.
-        # For Vercel deployment, FRONTEND_URL should always be available.
-        raise HTTPException(
-            status_code=500, 
-            detail="Server configuration error: FRONTEND_URL is not set, cannot initiate OAuth."
-        )
+    environment = os.getenv("ENVIRONMENT", "development").lower()
+    redirect_uri: str
 
-    # Ensure no trailing slash from app_base_url and then append the known callback path
-    redirect_uri = f"{app_base_url.rstrip('/')}/api/auth/callback/google"
-    
-    logger.info(f"Using FRONTEND_URL ('{app_base_url}') to construct redirect_uri for Google OAuth: {redirect_uri}")
+    if environment == "development":
+        # For local development, always use the backend's callback URL directly.
+        redirect_uri = "http://localhost:8000/api/auth/callback/google"
+        logger.info(f"Using local development redirect_uri for Google OAuth: {redirect_uri}")
+    else:
+        # For production or other environments, use FRONTEND_URL to construct the callback.
+        # This assumes the /api/auth/callback/google is served relative to the frontend host,
+        # which might need adjustment if the API is on a completely different domain in prod.
+        # However, based on current logs, it seems FRONTEND_URL is used as the base for the callback.
+        app_base_url = os.getenv("FRONTEND_URL")
+        if not app_base_url:
+            logger.error("CRITICAL: FRONTEND_URL environment variable is not set for non-development environment. Cannot construct Google OAuth redirect_uri.")
+            raise HTTPException(
+                status_code=500, 
+                detail="Server configuration error: FRONTEND_URL is not set, cannot initiate OAuth."
+            )
+        redirect_uri = f"{app_base_url.rstrip('/')}/api/auth/callback/google"
+        logger.info(f"Using FRONTEND_URL ('{app_base_url}') to construct redirect_uri for Google OAuth: {redirect_uri}")
     
     return await oauth.google.authorize_redirect(request, redirect_uri) # Ensure redirect_uri is a string
 

@@ -89,18 +89,17 @@ async def analyze_query_for_filters(query: str, query_analysis_model_key: str, *
 
     current_date_str = date.today().isoformat()
     system_prompt = (
-        f"Today\'s date is {current_date_str}. Use this as the reference for any relative date calculations (e.g., \'last month\', \'past 6 months\'). "
+        f"Today's date is {current_date_str}. Use this as the reference for any relative date calculations (e.g., 'last month', 'past 6 months'). "
         "You are a query analysis assistant. Your task is to analyze the user query and the available Notion database fields "
         "(including known values for some fields) to extract structured filters. Identify potential entities like names, tags, dates, or date ranges mentioned in the query "
         "and map them to the most relevant field based on the provided schema AND the known values. Format the output as a JSON object. "
-        "Recognize date ranges (like 'last year', '2024', 'next month', 'June 2023', or specific start/end dates). For date ranges, output a 'date_range' key "
-        "with 'start' and 'end' sub-keys in 'YYYY-MM-DD' format. **For a single year like \'in 2024\', this means start: \'2024-01-01\' and end: \'2024-12-31\'.** "
-        "For specific field value filters, output a 'filters' key containing "
-        "a list of objects, where each object has 'field' (the Notion property name) and 'contains' (the value extracted from the query). "
-        "**Important:** Names of people are typically found in the 'Family' (relation) or 'Friends' (relation) fields. Use the 'Known values' list provided for these fields to help map names accurately. Map person names to THESE fields unless the query specifically asks about the entry\'s title (the 'Name' field). "
-        "If a name could belong to either 'Family' or 'Friends' based on known values or context, include filters for BOTH fields. "
-        "Match keywords mentioned in the query to the 'Known values' for the 'Tags' field where appropriate. "
-        "If no specific filters are identified, return an empty JSON object {}."
+        "**Important Filtering Guidelines:**\\\\n"
+        "1.  **Person Names ('Family', 'Friends' fields):** Only map actual *person names* to the 'Family' or 'Friends' fields. Use the 'Known values' list for these fields to help. Do NOT map names of businesses, restaurants (e.g., 'Mamahuhu'), locations, specific items, or other organizations to 'Family' or 'Friends'.\\\\n"
+        "2.  **Tags ('Tags' field):** Match keywords, including relevant proper nouns that are NOT people, to the 'Known values' for the 'Tags' field if appropriate.\\\\n"
+        "3.  **Entry Title ('Name' field) & General Keywords:** The 'Name' field in the schema represents the title of the journal entry. For proper nouns or keywords (like 'Mamahuhu') that are NOT people (as per guideline #1) and DO NOT match any of the 'Known values' for the 'Tags' field (as per guideline #2), **DO NOT create a filter object for the 'Name' field (e.g., do not output `{'field': 'Name', 'contains': 'Mamahuhu'}`).** Such terms should be considered part of the general user query to be handled by semantic search over the entry titles and content, not as a specific metadata filter against the 'Name' field itself, unless the query explicitly asks to filter entry titles *containing* that specific keyword. If the query is general, like 'What about Mamahuhu?', let semantic search find relevant entries without a 'Name' field filter.\\\\n"
+        "4.  **Date Ranges:** Recognize date ranges (like 'last year', '2024', 'next month', 'June 2023', or specific start/end dates). For date ranges, output a 'date_range' key with 'start' and 'end' sub-keys in 'YYYY-MM-DD' format. **For a single year like 'in 2024', this means start: '2024-01-01' and end: '2024-12-31'.**\\\\n"
+        "For specific field value filters (like 'Family', 'Friends', 'Tags'), output a 'filters' key containing a list of objects, where each object has 'field' (the Notion property name) and 'contains' (the value extracted from the query).\\\\n"
+        "If no specific filters are identified, return an empty JSON object {}.\\\\n"
     )
     
     user_prompt = f"""Available Notion Fields (with known values for some):

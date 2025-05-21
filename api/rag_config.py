@@ -63,11 +63,11 @@ MODEL_CONFIG = {
         "max_output_tokens": 8192, # Max output for Claude 3.5 Haiku
     },
     # Add other models here as needed, e.g., Claude 3.5 Sonnet when UI supports it
-    # "claude-3-5-sonnet-20240620": {
-    #     "api_id": "claude-3-5-sonnet-20240620",
-    #     "provider": "anthropic",
-    #     "cost_per_input_token": 3.00 / 1_000_000,
-    #     "cost_per_output_token": 15.00 / 1_000_000,
-    #     "max_output_tokens": 8192,
-    # },
+    "claude-3-7-sonnet-20250219": { # Key changed to match frontend value
+        "api_id": "claude-3-7-sonnet-20250219", # Corrected Anthropic API ID to match the key
+        "provider": "anthropic",
+        "cost_per_input_token": 3.00 / 1_000_000, # Assuming same as 3.5 Sonnet, update if different
+        "cost_per_output_token": 15.00 / 1_000_000, # Assuming same as 3.5 Sonnet, update if different
+        "max_output_tokens": 64000, # Max output for Claude 3.7 Sonnet from docs
+    },
 } 
